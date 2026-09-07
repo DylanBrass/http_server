@@ -47,7 +47,7 @@ Response handle_static_page(const Request* request)
 
 Response handle_post(const Request* request)
 {
-    printf("POST body: %.*s\n", (int)request->body_length, request->body);
+    // printf("POST body: %.*s\n", (int)request->body_length, request->body);
 
     const char* body = request->body;
     return (Response){
@@ -57,7 +57,7 @@ Response handle_post(const Request* request)
 
 Response handle_update(const Request* request)
 {
-    printf("PUT body: %.*s\n", (int)request->body_length, request->body);
+    // printf("PUT body: %.*s\n", (int)request->body_length, request->body);
 
     const char* body = request->body;
     return (Response){
@@ -70,7 +70,7 @@ Response handle_update(const Request* request)
 
 Response handle_delete(const Request* request)
 {
-    printf("DELETE %s\n", request->uri);
+    // printf("DELETE %s\n", request->uri);
 
     const char* body = "";
     return (Response){

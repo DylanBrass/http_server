@@ -5,13 +5,25 @@
 #ifndef HTTP_SERVER_HTTPSERVER_H
 #define HTTP_SERVER_HTTPSERVER_H
 
-#define BUFFER_SIZE 1024
+#define HTTP_DELIMITER "\r\n\r\n"
+// - 1 to take into account \0 (the indication of the end of string
+#define HTTP_DELIMITER_LEN (sizeof(HTTP_DELIMITER) - 1)
+
+#define HEADER_CONTENT_TYPE "Content-Type: "
+// - 1 to take into account \0 (the indication of the end of string
+#define HEADER_CONTENT_TYPE_LEN (sizeof(HEADER_CONTENT_TYPE) - 1)
+
+#define HEADER_CONTENT_LENGTH "Content-Length: "
+// - 1 to take into account \0 (the indication of the end of string
+#define HEADER_CONTENT_LENGTH_LEN (sizeof(HEADER_CONTENT_LENGTH) - 1)
+
 #define RESPONSE_HEADER_SIZE 256
 // TODO: make it dynamic
 #define MAX_ROUTES 32
+// TODO: make it dynamic for bigger requests
+#define BUFFER_SIZE 1024
 
 #define URI_MAX_LENGTH 256
-#include <stddef.h>
 
 int start_server(int port);
 
@@ -21,7 +33,7 @@ int string_compare(const char* str1, const char* str2);
 
 int string_copy(char* target, const char* source, size_t max_len);
 
-int find_str_in_str(const char* haystack, const char* needle, size_t target_occurrence);
+int find_str_in_str(const char* haystack, const char* needle, size_t start_from, size_t target_occurrence);
 
 enum HTTP_METHOD
 {

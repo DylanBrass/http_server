@@ -42,7 +42,9 @@ RouteHandler find_route(enum HTTP_METHOD http_method, char* uri)
 
 enum HTTP_METHOD parse_http_method(const char* buffer)
 {
-    const int space_pos = find_str_in_str(buffer, " ", 1);
+    const int space_pos = find_str_in_str(buffer, " ", 0, 1);
+    if (space_pos == -1) return UNKNOWN;
+
     char method_str[16];
 
     string_copy(method_str, buffer, space_pos + 1);
@@ -57,8 +59,8 @@ enum HTTP_METHOD parse_http_method(const char* buffer)
 
 void parse_uri(const char* buffer, char* uri_out)
 {
-    const int first_space = find_str_in_str(buffer, " ", 1);
-    const int second_space = find_str_in_str(buffer, " ", 2);
+    const int first_space = find_str_in_str(buffer, " ", 0, 1);
+    const int second_space = find_str_in_str(buffer, " ", first_space + 1, 1);
 
     const size_t path_len = second_space - first_space - 1;
 
@@ -67,15 +69,16 @@ void parse_uri(const char* buffer, char* uri_out)
 
 enum CONTENT_TYPE parse_content_type(const char* buffer)
 {
-    const int label_pos = find_str_in_str(buffer, "Content-Type: ", 1);
+    const int label_pos = find_str_in_str(buffer, HEADER_CONTENT_TYPE, 0, 1);
 
     if (label_pos == -1)
     {
         return CONTENT_TYPE_NONE;
     }
 
-    const size_t value_start = label_pos + get_length("Content-Type: ");
-    const int line_end = find_str_in_str(buffer + value_start, "\r\n", 1);
+    const size_t value_start = label_pos + HEADER_CONTENT_TYPE_LEN;
+    const int line_end = find_str_in_str(buffer + value_start, "\r\n", 0, 1);
+    if (line_end == -1) return CONTENT_TYPE_NONE;
 
     char content_type_str[64];
     string_copy(content_type_str, buffer + value_start, line_end + 1);
@@ -91,7 +94,7 @@ enum CONTENT_TYPE parse_content_type(const char* buffer)
 
 size_t parse_content_length(const char* buffer)
 {
-    const int label_pos = find_str_in_str(buffer, "Content-Length: ", 1);
+    const int label_pos = find_str_in_str(buffer, HEADER_CONTENT_LENGTH, 0, 1);
 
     // If we do not see the header, this means there is no body
     if (label_pos == -1)
@@ -99,7 +102,7 @@ size_t parse_content_length(const char* buffer)
         return 0;
     }
 
-    const size_t value_start = label_pos + get_length("Content-Length: ");
+    const size_t value_start = label_pos + HEADER_CONTENT_LENGTH_LEN;
 
     size_t result = 0;
     size_t i = 0;

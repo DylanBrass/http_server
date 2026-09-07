@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-
 #include "httpserver.h"
 #include <signal.h>
 
@@ -88,34 +87,53 @@ Response create_response(const RouteHandler handler, const Request* request)
     return response;
 }
 
-char* get_request_body(char* buffer, const int current_connection, size_t bytes_already_read)
+void add_request_body(char* buffer, const int current_connection, size_t bytes_already_read, Request* request)
 {
-    const int headers_end = find_str_in_str(buffer, "\r\n\r\n", 1);
-    const size_t body_start = headers_end + 4;
-    const size_t content_length = parse_content_length(buffer);
-    const size_t target_total = body_start + content_length;
+    const int headers_end = find_str_in_str(buffer, HTTP_DELIMITER, 0, 1);
 
-    while (bytes_already_read < target_total && bytes_already_read < BUFFER_SIZE - 1)
+    char* body;
+
+    if (headers_end == -1)
     {
-        const ssize_t bytes_read = read(current_connection, buffer + bytes_already_read,
-                                         BUFFER_SIZE - 1 - bytes_already_read);
+        body = "";
+    }
+    else
+    {
+        const size_t body_start = headers_end + HTTP_DELIMITER_LEN;
+        const size_t content_length = parse_content_length(buffer);
+        size_t target_total = body_start + content_length;
 
-        if (bytes_read <= 0)
+        if (target_total > BUFFER_SIZE - 1)
         {
-            break;
+            target_total = BUFFER_SIZE - 1;
         }
 
-        bytes_already_read += bytes_read;
-        buffer[bytes_already_read] = '\0';
+        while (bytes_already_read < target_total && bytes_already_read < BUFFER_SIZE - 1)
+        {
+            const ssize_t bytes_read = read(current_connection, buffer + bytes_already_read,
+                                            BUFFER_SIZE - 1 - bytes_already_read);
+
+            if (bytes_read <= 0)
+            {
+                break;
+            }
+
+            bytes_already_read += bytes_read;
+            buffer[bytes_already_read] = '\0';
+        }
+
+        // the body pointer is set at the buffer pointer + where the body starts in the request
+        body = buffer + body_start;
     }
 
-    // return the pointer to be the buffer pointer + where the body starts in the request
-    return buffer + body_start;
+
+    request->body = body;
+    request->body_length = parse_content_length(buffer);
 }
 
 void handle_client_connection(const int current_connection, char buffer[BUFFER_SIZE])
 {
-    printf("Client connected\n");
+    // printf("Client connected\n");
 
     ssize_t total_bytes_read = 0;
 
@@ -132,14 +150,14 @@ void handle_client_connection(const int current_connection, char buffer[BUFFER_S
 
         if (bytes_read == 0)
         {
-            printf("Client disconnected\n");
+            // printf("Client disconnected\n");
             break;
         }
 
         total_bytes_read += bytes_read;
         buffer[total_bytes_read] = '\0';
 
-        if (find_str_in_str(buffer, "\r\n\r\n", 1) != -1)
+        if (find_str_in_str(buffer, HTTP_DELIMITER, 0, 1) != -1)
         {
             break;
         }
@@ -152,16 +170,14 @@ void handle_client_connection(const int current_connection, char buffer[BUFFER_S
 
     const RouteHandler handler = find_route(http_method, uri);
 
-    printf("method=%d uri=%s\n", http_method, uri);
+    // printf("method=%d uri=%s\n", http_method, uri);
 
-    const char* body = get_request_body(buffer, current_connection, total_bytes_read);
 
     Request request;
+    add_request_body(buffer, current_connection, total_bytes_read, &request);
     request.method = http_method;
     string_copy(request.uri, uri, URI_MAX_LENGTH);
     request.content_type = parse_content_type(buffer);
-    request.body = body;
-    request.body_length = parse_content_length(buffer);
 
     const Response response = create_response(handler, &request);
 
@@ -169,16 +185,15 @@ void handle_client_connection(const int current_connection, char buffer[BUFFER_S
     write(current_connection, response.body, response.body_length);
 
     close(current_connection);
-    printf("Client disconnected\n");
+    // printf("Client disconnected\n");
 }
 
 void run_server(const int socket_descriptor)
 {
+    // TODO: make it multi threaded
     while (true)
     {
         const int current_connection = accept(socket_descriptor, nullptr, nullptr);
-
-
         char buffer[BUFFER_SIZE] = {0};
 
 

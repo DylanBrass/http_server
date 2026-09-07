@@ -51,10 +51,10 @@ int string_copy(char* target, const char* source, const size_t max_len)
     return 0;
 }
 
-int find_str_in_str(const char* haystack, const char* needle, const size_t target_occurrence)
+int find_str_in_str(const char* haystack, const char* needle, const size_t start_from, const size_t target_occurrence)
 {
     const size_t needle_len = get_length(needle);
-    size_t start = 0;
+    size_t start = start_from;
     size_t nb_found = 0;
 
     while (haystack[start] != '\0')

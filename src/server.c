@@ -96,6 +96,7 @@ void add_request_body(char* buffer, const int current_connection, size_t bytes_a
     if (headers_end == -1)
     {
         body = "";
+        request->body_length = 0;
     }
     else
     {
@@ -108,6 +109,8 @@ void add_request_body(char* buffer, const int current_connection, size_t bytes_a
             target_total = BUFFER_SIZE - 1;
         }
 
+        bool connection_ended_early = false;
+
         while (bytes_already_read < target_total && bytes_already_read < BUFFER_SIZE - 1)
         {
             const ssize_t bytes_read = read(current_connection, buffer + bytes_already_read,
@@ -115,6 +118,7 @@ void add_request_body(char* buffer, const int current_connection, size_t bytes_a
 
             if (bytes_read <= 0)
             {
+                connection_ended_early = true;
                 break;
             }
 
@@ -124,11 +128,20 @@ void add_request_body(char* buffer, const int current_connection, size_t bytes_a
 
         // the body pointer is set at the buffer pointer + where the body starts in the request
         body = buffer + body_start;
+
+        // set the body length to :
+        // if the connection stopped as expected, simply return how many bytes
+        // the body is the total claimed (target_total) - the start of the body
+        // if it ended early and we read more than where the body starts:
+        // then we return the total size of the read body right up to the disconnect
+        // else we return 0, since we would not have even started to read the body.
+        request->body_length = connection_ended_early
+                                   ? (bytes_already_read > body_start ? bytes_already_read - body_start : 0)
+                                   : target_total - body_start;
     }
 
 
     request->body = body;
-    request->body_length = parse_content_length(buffer);
 }
 
 void handle_client_connection(const int current_connection, char buffer[BUFFER_SIZE])

@@ -18,10 +18,8 @@
 #define HEADER_CONTENT_LENGTH_LEN (sizeof(HEADER_CONTENT_LENGTH) - 1)
 
 #define RESPONSE_HEADER_SIZE 256
-// TODO: make it dynamic
-#define MAX_ROUTES 32
-// TODO: make it dynamic for bigger requests
-#define BUFFER_SIZE 1024
+
+#define INIT_BUFFER_SIZE 1024
 
 #define URI_MAX_LENGTH 256
 
@@ -93,5 +91,7 @@ enum HTTP_METHOD parse_http_method(const char* buffer);
 enum CONTENT_TYPE parse_content_type(const char* buffer);
 
 size_t parse_content_length(const char* buffer);
+
+void route_cleanup();
 
 #endif //HTTP_SERVER_HTTPSERVER_H

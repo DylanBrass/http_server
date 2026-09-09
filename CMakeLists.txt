@@ -6,7 +6,8 @@ set(CMAKE_C_STANDARD 23)
 add_library(httpserver src/server.c src/router.c
         include/httpserver.h
         src/utils/str_functions.c
-        src/utils/arr_functions.c)
+        src/utils/buffer.c
+        src/utils/buffer.h)
 
 target_include_directories(httpserver PUBLIC include)
 

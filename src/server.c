@@ -9,6 +9,8 @@
 #include "httpserver.h"
 #include <signal.h>
 
+#include "utils/buffer.h"
+
 volatile sig_atomic_t should_shutdown = 0;
 
 void handle_shutdown_signal(int _)
@@ -30,6 +32,7 @@ const char* get_status_text(const int status_code)
     case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
+    case 413: return "Content Too Large";
     case 500: return "Internal Server Error";
     case 501: return "Not Implemented";
     default: return "Unknown";
@@ -87,9 +90,9 @@ Response create_response(const RouteHandler handler, const Request* request)
     return response;
 }
 
-void add_request_body(char* buffer, const int current_connection, size_t bytes_already_read, Request* request)
+int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_already_read, Request* request)
 {
-    const int headers_end = find_str_in_str(buffer, HTTP_DELIMITER, 0, 1);
+    const int headers_end = find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1);
 
     char* body;
 
@@ -101,20 +104,26 @@ void add_request_body(char* buffer, const int current_connection, size_t bytes_a
     else
     {
         const size_t body_start = headers_end + HTTP_DELIMITER_LEN;
-        const size_t content_length = parse_content_length(buffer);
-        size_t target_total = body_start + content_length;
+        const size_t content_length = parse_content_length(buffer->data);
+        const size_t target_total = body_start + content_length;
 
-        if (target_total > BUFFER_SIZE - 1)
+        if (target_total > INIT_BUFFER_SIZE * 4)
         {
-            target_total = BUFFER_SIZE - 1;
+            return -2;
+        }
+
+        if (allocate_buffer(buffer, target_total + 1) < 0)
+        {
+            perror("buffer allocation failed");
+            return -1;
         }
 
         bool connection_ended_early = false;
 
-        while (bytes_already_read < target_total && bytes_already_read < BUFFER_SIZE - 1)
+        while (bytes_already_read < target_total)
         {
-            const ssize_t bytes_read = read(current_connection, buffer + bytes_already_read,
-                                            BUFFER_SIZE - 1 - bytes_already_read);
+            const ssize_t bytes_read = read(current_connection, buffer->data + bytes_already_read,
+                                            buffer->capacity - 1 - bytes_already_read);
 
             if (bytes_read <= 0)
             {
@@ -123,11 +132,11 @@ void add_request_body(char* buffer, const int current_connection, size_t bytes_a
             }
 
             bytes_already_read += bytes_read;
-            buffer[bytes_already_read] = '\0';
+            buffer->data[bytes_already_read] = '\0';
         }
 
         // the body pointer is set at the buffer pointer + where the body starts in the request
-        body = buffer + body_start;
+        body = buffer->data + body_start;
 
         // set the body length to :
         // if the connection stopped as expected, simply return how many bytes
@@ -142,44 +151,45 @@ void add_request_body(char* buffer, const int current_connection, size_t bytes_a
 
 
     request->body = body;
+    return 0;
 }
 
-void handle_client_connection(const int current_connection, char buffer[BUFFER_SIZE])
+int handle_client_connection(const int current_connection, Buffer* buffer)
 {
     // printf("Client connected\n");
 
     ssize_t total_bytes_read = 0;
 
-    while (total_bytes_read < BUFFER_SIZE - 1)
+    while (total_bytes_read < buffer->capacity - 1)
     {
-        const ssize_t bytes_read = read(current_connection, buffer + total_bytes_read,
-                                        BUFFER_SIZE - 1 - total_bytes_read);
+        if (allocate_buffer(buffer, total_bytes_read + GROWTH_CHUNK) < 0)
+        {
+            perror("buffer allocation failed");
+            break;
+        }
 
-        if (bytes_read < 0)
+        const ssize_t bytes_read = read(current_connection, buffer->data + total_bytes_read,
+                                        buffer->capacity - 1 - total_bytes_read);
+
+        if (bytes_read <= 0)
         {
             perror("read failed");
             break;
         }
 
-        if (bytes_read == 0)
-        {
-            // printf("Client disconnected\n");
-            break;
-        }
-
         total_bytes_read += bytes_read;
-        buffer[total_bytes_read] = '\0';
+        buffer->data[total_bytes_read] = '\0';
 
-        if (find_str_in_str(buffer, HTTP_DELIMITER, 0, 1) != -1)
+        if (find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1) != -1)
         {
             break;
         }
     }
 
     char uri[URI_MAX_LENGTH];
-    parse_uri(buffer, uri);
+    parse_uri(buffer->data, uri);
 
-    const enum HTTP_METHOD http_method = parse_http_method(buffer);
+    const enum HTTP_METHOD http_method = parse_http_method(buffer->data);
 
     const RouteHandler handler = find_route(http_method, uri);
 
@@ -187,17 +197,39 @@ void handle_client_connection(const int current_connection, char buffer[BUFFER_S
 
 
     Request request;
-    add_request_body(buffer, current_connection, total_bytes_read, &request);
+    const int result = add_request_body(buffer, current_connection, total_bytes_read, &request);
+
+    if (result == -2)
+    {
+        const char* oversized_request_body = "<h1>413 Oversized request</h1>";
+        const Response response = {
+            .status_code = 413, .content_type = APPLICATION_JSON, .body = oversized_request_body,
+            .body_length = get_length(oversized_request_body)
+        };
+        write_http_header(current_connection, response);
+        write(current_connection, response.body, response.body_length);
+        free_buffer(buffer);
+        close(current_connection);
+        return 0;
+    }
+
+    if (result < 0)
+    {
+        return -1;
+    }
+
     request.method = http_method;
     string_copy(request.uri, uri, URI_MAX_LENGTH);
-    request.content_type = parse_content_type(buffer);
+    request.content_type = parse_content_type(buffer->data);
 
     const Response response = create_response(handler, &request);
 
     write_http_header(current_connection, response);
     write(current_connection, response.body, response.body_length);
 
+    free_buffer(buffer);
     close(current_connection);
+    return 0;
     // printf("Client disconnected\n");
 }
 
@@ -207,8 +239,7 @@ void run_server(const int socket_descriptor)
     while (true)
     {
         const int current_connection = accept(socket_descriptor, nullptr, nullptr);
-        char buffer[BUFFER_SIZE] = {0};
-
+        Buffer buffer = {0};
 
         if (current_connection < 0)
         {
@@ -221,8 +252,12 @@ void run_server(const int socket_descriptor)
             continue;
         }
 
+        allocate_buffer(&buffer, INIT_BUFFER_SIZE);
 
-        handle_client_connection(current_connection, buffer);
+        if (handle_client_connection(current_connection, &buffer) < 0)
+        {
+            perror("Failed to handle client connection");
+        }
     }
 }
 
@@ -303,6 +338,7 @@ int start_server(const int port)
     run_server(socket_descriptor);
 
     close(socket_descriptor);
+    route_cleanup();
     printf("Server shutting down\n");
 
     return 0;

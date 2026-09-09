@@ -2,19 +2,31 @@
 // Created by dylanbrass on 2026-09-06.
 //
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "httpserver.h"
+#define DEFAULT_ROUTE_LIMIT 5
 
-static Route routes[MAX_ROUTES];
+static Route* routes = nullptr;
+static int route_capacity = 0;
 static int route_count = 0;
 
 int register_route(const enum HTTP_METHOD http_method, const enum CONTENT_TYPE request_body_content_type,
                    const char* uri, const RouteHandler handler)
 {
-    if (route_count >= MAX_ROUTES)
+    if (route_count == route_capacity)
     {
-        perror("route count exceeds MAX_ROUTES");
-        return -1;
+        const int new_capacity = route_capacity == 0 ? DEFAULT_ROUTE_LIMIT : route_capacity * 2;
+        Route* new_routes = realloc(routes, new_capacity * sizeof(Route));
+
+        if (new_routes == nullptr)
+        {
+            return -1;
+        }
+
+        // printf("New capacity %d\n", new_capacity);
+        routes = new_routes;
+        route_capacity = new_capacity;
     }
 
     Route* new_route = &routes[route_count];
@@ -115,4 +127,12 @@ size_t parse_content_length(const char* buffer)
     }
 
     return result;
+}
+
+void route_cleanup()
+{
+    free(routes);
+    route_capacity = 0;
+    route_count = 0;
+    routes = nullptr;
 }

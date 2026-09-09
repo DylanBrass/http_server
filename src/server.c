@@ -71,6 +71,16 @@ void write_http_header(const int current_connection, const Response response)
     write(current_connection, response_headers, get_length(response_headers));
 }
 
+void write_error_response(const int current_connection, const int status_code, const char* body)
+{
+    const Response response = {
+        .status_code = status_code, .content_type = TEXT_HTML, .body = body,
+        .body_length = get_length(body)
+    };
+    write_http_header(current_connection, response);
+    write(current_connection, response.body, response.body_length);
+}
+
 Response create_response(const RouteHandler handler, const Request* request)
 {
     Response response;
@@ -107,7 +117,7 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
         const size_t content_length = parse_content_length(buffer->data);
         const size_t target_total = body_start + content_length;
 
-        if (target_total > INIT_BUFFER_SIZE * 4)
+        if (target_total > MAX_REQUEST_SIZE)
         {
             return -2;
         }
@@ -122,8 +132,10 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
 
         while (bytes_already_read < target_total)
         {
+            // This will read up to the size of the body declared in the header
+            const size_t remaining_needed = target_total - bytes_already_read;
             const ssize_t bytes_read = read(current_connection, buffer->data + bytes_already_read,
-                                            buffer->capacity - 1 - bytes_already_read);
+                                            remaining_needed);
 
             if (bytes_read <= 0)
             {
@@ -159,9 +171,18 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
     // printf("Client connected\n");
 
     ssize_t total_bytes_read = 0;
+    bool headers_complete = false;
 
-    while (total_bytes_read < buffer->capacity - 1)
+    while (true)
     {
+        if ((size_t)total_bytes_read >= MAX_HEADER_SIZE)
+        {
+            write_error_response(current_connection, 400, "<h1>400 Bad Request - Headers Too Large</h1>");
+            free_buffer(buffer);
+            close(current_connection);
+            return 0;
+        }
+
         if (allocate_buffer(buffer, total_bytes_read + GROWTH_CHUNK) < 0)
         {
             perror("buffer allocation failed");
@@ -182,8 +203,18 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
 
         if (find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1) != -1)
         {
+            headers_complete = true;
             break;
         }
+    }
+
+    // Make sure the header was read completely,
+    // should only enter this if the header was bigger then the limit
+    if (!headers_complete)
+    {
+        free_buffer(buffer);
+        close(current_connection);
+        return 0;
     }
 
     char uri[URI_MAX_LENGTH];
@@ -195,19 +226,12 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
 
     // printf("method=%d uri=%s\n", http_method, uri);
 
-
     Request request;
     const int result = add_request_body(buffer, current_connection, total_bytes_read, &request);
 
     if (result == -2)
     {
-        const char* oversized_request_body = "<h1>413 Oversized request</h1>";
-        const Response response = {
-            .status_code = 413, .content_type = APPLICATION_JSON, .body = oversized_request_body,
-            .body_length = get_length(oversized_request_body)
-        };
-        write_http_header(current_connection, response);
-        write(current_connection, response.body, response.body_length);
+        write_error_response(current_connection, 413, "<h1>413 Oversized request</h1>");
         free_buffer(buffer);
         close(current_connection);
         return 0;
@@ -215,6 +239,8 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
 
     if (result < 0)
     {
+        free_buffer(buffer);
+        close(current_connection);
         return -1;
     }
 
@@ -252,7 +278,12 @@ void run_server(const int socket_descriptor)
             continue;
         }
 
-        allocate_buffer(&buffer, INIT_BUFFER_SIZE);
+        if (allocate_buffer(&buffer, INIT_BUFFER_SIZE) < 0)
+        {
+            perror("initial buffer allocation failed");
+            close(current_connection);
+            continue;
+        }
 
         if (handle_client_connection(current_connection, &buffer) < 0)
         {

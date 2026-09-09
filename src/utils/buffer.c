@@ -3,6 +3,7 @@
 //
 #include "buffer.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "httpserver.h"
@@ -13,11 +14,15 @@ int allocate_buffer(Buffer* buffer, const size_t new_size)
     {
         return 0;
     }
+
     size_t new_capacity = buffer->capacity == 0 ? INIT_BUFFER_SIZE : buffer->capacity * 2;
+
     while (new_capacity < new_size)
     {
         new_capacity *= 2;
     }
+
+    printf("Resize: %zu -> %zu\n", buffer->capacity, new_capacity);
 
     char* new_data = realloc(buffer->data, new_capacity);
     if (new_data == nullptr)

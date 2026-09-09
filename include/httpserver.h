@@ -23,6 +23,9 @@
 
 #define URI_MAX_LENGTH 256
 
+#define MAX_REQUEST_SIZE 1048576
+#define MAX_HEADER_SIZE 16384
+
 int start_server(int port);
 
 size_t get_length(const char* arr);

@@ -11,7 +11,8 @@ Everything is implemented on top of POSIX sockets and the standard C library onl
 - Support for `GET`, `POST`, `PUT`, and `DELETE`
 - Request bodies read according to `Content-Length`, exposed to handlers
 - `Content-Type` parsing for incoming requests
-- A small routing API: register a handler per (method, path) pair
+- A small routing API: register a handler per (method, path) pair, backed by a route table that grows dynamically (`realloc`) instead of a fixed-size array
+- Per-connection read buffer that grows dynamically (`realloc`) as data arrives, instead of a fixed-size buffer
 - Structured `Request` / `Response` types passed to and returned from handlers
 - Graceful shutdown on `SIGINT`/`SIGTERM` via `sigaction`
 - Built as a static library (`httpserver`) consumed by a separate example executable (`dashboard_server`)
@@ -26,6 +27,8 @@ http_server/
 │   ├── server.c            # Socket lifecycle, request/response I/O, shutdown handling
 │   ├── router.c            # Route registration/matching, request-line & header parsing
 │   └── utils/
+│       ├── buffer.c        # Dynamic (realloc-based) growable buffer used for connection reads
+│       ├── buffer.h        # Buffer type and API
 │       └── str_functions.c # Hand-written string utilities (length, compare, copy, search)
 ├── example/
 │   └── main.c              # Example consumer: registers routes, starts the server
@@ -98,9 +101,8 @@ int main(void)
 
 ## Known limitations
 
-- Fixed-size request buffer (`BUFFER_SIZE`) — very large requests/bodies aren't yet handled with a proper `413`/`431` response
-- Routes are stored in a fixed-size array (`MAX_ROUTES`); no dynamic growth yet
 - Single-threaded — one connection is fully handled before the next is accepted
 - No HTTPS/TLS support
 - No support for `Transfer-Encoding: chunked` bodies
-
+- A few header-value fields (HTTP method, `Content-Type`) are parsed into small fixed-size stack buffers sized for well-formed input; malformed or oversized values aren't yet bounds-checked against these buffers, so this needs hardening before being exposed to untrusted clients
+- The request line parser (`parse_uri`) assumes a well-formed `METHOD /path HTTP/x.x` line; a request line missing its second space is not yet handled defensively

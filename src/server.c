@@ -18,6 +18,13 @@ void handle_shutdown_signal(int _)
     should_shutdown = true;
 }
 
+void close_server(const int socket_descriptor)
+{
+    close(socket_descriptor);
+    route_cleanup();
+    printf("Server shutting down\n");
+}
+
 const char* get_status_text(const int status_code)
 {
     switch (status_code)
@@ -119,7 +126,10 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
 
         if (target_total > MAX_REQUEST_SIZE)
         {
-            return -2;
+            write_error_response(current_connection, 413, "<h1>413 Oversized request</h1>");
+            free_buffer(buffer);
+            close(current_connection);
+            return -1;
         }
 
         if (allocate_buffer(buffer, target_total + 1) < 0)
@@ -150,7 +160,7 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
         // the body pointer is set at the buffer pointer + where the body starts in the request
         body = buffer->data + body_start;
 
-        // set the body length to :
+        // set the body length :
         // if the connection stopped as expected, simply return how many bytes
         // the body is the total claimed (target_total) - the start of the body
         // if it ended early and we read more than where the body starts:
@@ -189,6 +199,8 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
             break;
         }
 
+        // Takes the buffer->data memory addr (+ what is already read to not overwrite)
+        // and writes the data from the connection to that char* (aka buffer->data)
         const ssize_t bytes_read = read(current_connection, buffer->data + total_bytes_read,
                                         buffer->capacity - 1 - total_bytes_read);
 
@@ -199,6 +211,7 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
         }
 
         total_bytes_read += bytes_read;
+        // Indicate where the string ends in the buffer->data
         buffer->data[total_bytes_read] = '\0';
 
         if (find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1) != -1)
@@ -208,8 +221,7 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
         }
     }
 
-    // Make sure the header was read completely,
-    // should only enter this if the header was bigger then the limit
+    // Make sure the header was read completely
     if (!headers_complete)
     {
         free_buffer(buffer);
@@ -228,14 +240,6 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
 
     Request request;
     const int result = add_request_body(buffer, current_connection, total_bytes_read, &request);
-
-    if (result == -2)
-    {
-        write_error_response(current_connection, 413, "<h1>413 Oversized request</h1>");
-        free_buffer(buffer);
-        close(current_connection);
-        return 0;
-    }
 
     if (result < 0)
     {
@@ -287,7 +291,7 @@ void run_server(const int socket_descriptor)
 
         if (handle_client_connection(current_connection, &buffer) < 0)
         {
-            perror("Failed to handle client connection");
+            printf("Failed to handle client connection\n");
         }
     }
 }
@@ -308,8 +312,8 @@ int start_server(const int port)
     address.sin_family = AF_INET;
     // htons transforms the number 8080 in this case
     // which is 1F90 in hexa to the correct form depending on the CPU architecture.
-    // Some CPUs will store 90 1F since they put the biggest bytes first and others
-    // will store 1F 90 (smallest bytes first). htons is host to network, meaning it converts the number 8080 (90 1F)
+    // Some CPUs will store 1F 90 since they put the biggest bytes first and others
+    // will store 90 1F (smallest bytes first). htons is host to network, meaning it converts the number 8080 (90 1F)
     // to what the network expects which is Big-endian, biggest bytes first.
     // Basically big-endian is putting the biggest bytes in the first memory addr
     // and small-endian is putting the smallest bytes in the lowest memory addr
@@ -368,9 +372,7 @@ int start_server(const int port)
 
     run_server(socket_descriptor);
 
-    close(socket_descriptor);
-    route_cleanup();
-    printf("Server shutting down\n");
+    close_server(socket_descriptor);
 
     return 0;
 }

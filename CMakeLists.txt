@@ -7,7 +7,9 @@ add_library(httpserver src/server.c src/router.c
         include/httpserver.h
         src/utils/str_functions.c
         src/utils/buffer.c
-        src/utils/buffer.h)
+        src/utils/buffer.h
+        src/utils/queue.h
+        src/utils/queue.c)
 
 target_include_directories(httpserver PUBLIC include)
 

@@ -101,7 +101,6 @@ int main(void)
 
 ## Known limitations
 
-- Single-threaded — one connection is fully handled before the next is accepted
 - No HTTPS/TLS support
 - No support for `Transfer-Encoding: chunked` bodies
 - A few header-value fields (HTTP method, `Content-Type`) are parsed into small fixed-size stack buffers sized for well-formed input; malformed or oversized values aren't yet bounds-checked against these buffers, so this needs hardening before being exposed to untrusted clients

@@ -26,6 +26,9 @@
 #define MAX_REQUEST_SIZE 1048576
 #define MAX_HEADER_SIZE 16384
 
+#define MAX_CONNECTIONS 25
+#define THREAD_POOL_SIZE 8
+
 int start_server(int port);
 
 size_t get_length(const char* arr);

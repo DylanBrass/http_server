@@ -10,6 +10,7 @@
 #include <signal.h>
 
 #include "utils/buffer.h"
+#include "utils/queue.h"
 
 volatile sig_atomic_t should_shutdown = 0;
 
@@ -263,24 +264,20 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
     // printf("Client disconnected\n");
 }
 
-void run_server(const int socket_descriptor)
+void* handle_incoming_thread(void* arg)
 {
-    // TODO: make it multi threaded
+    ConnectionQueue* queue = arg;
+
     while (true)
     {
-        const int current_connection = accept(socket_descriptor, nullptr, nullptr);
-        Buffer buffer = {0};
+        const int current_connection = pop_connection(queue);
 
         if (current_connection < 0)
         {
-            if (should_shutdown)
-            {
-                break;
-            }
-
-            perror("accept failed");
-            continue;
+            break;
         }
+
+        Buffer buffer = {0};
 
         if (allocate_buffer(&buffer, INIT_BUFFER_SIZE) < 0)
         {
@@ -294,6 +291,54 @@ void run_server(const int socket_descriptor)
             printf("Failed to handle client connection\n");
         }
     }
+
+    return nullptr;
+}
+
+void run_server(const int socket_descriptor)
+{
+    ConnectionQueue queue;
+
+    if (queue_init(&queue) < 0)
+    {
+        perror("queue init failed");
+        return;
+    }
+
+    pthread_t workers[THREAD_POOL_SIZE];
+
+    for (int i = 0; i < THREAD_POOL_SIZE; i++)
+    {
+        pthread_create(&workers[i], nullptr, handle_incoming_thread, &queue);
+    }
+
+    while (true)
+    {
+        const int current_connection = accept(socket_descriptor, nullptr, nullptr);
+
+        if (current_connection < 0)
+        {
+            if (should_shutdown)
+            {
+                break;
+            }
+
+            perror("accept failed");
+            continue;
+        }
+
+        push_connection(&queue, current_connection);
+    }
+
+    queue_shutdown(&queue);
+
+    // Shutdown all threads
+    for (int i = 0; i < THREAD_POOL_SIZE; i++)
+    {
+        pthread_join(workers[i], nullptr);
+    }
+
+    queue_destroy(&queue);
 }
 
 int start_server(const int port)
@@ -352,7 +397,7 @@ int start_server(const int port)
     }
 
     // 10 is the max number of pending (not yet accepted) connections that can be in the queue
-    const int listen_result = listen(socket_descriptor, 10);
+    const int listen_result = listen(socket_descriptor, MAX_CONNECTIONS);
 
     if (listen_result < 0)
     {

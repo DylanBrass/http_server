@@ -4,7 +4,7 @@
 
 Response handle_status(const Request* _)
 {
-    static char json_buffer[256];
+    static thread_local char json_buffer[256];
     snprintf(json_buffer, sizeof(json_buffer),
         "{\"status\":\"ok\",\"uptime\":%d}", 42);
 
@@ -18,7 +18,7 @@ Response handle_status(const Request* _)
 
 Response handle_static_page(const Request* request)
 {
-    static char file_buffer[4096];
+    static thread_local char file_buffer[4096];
 
     FILE* fp = fopen("../www/test.html", "r");
 

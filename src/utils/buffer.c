@@ -22,7 +22,7 @@ int allocate_buffer(Buffer* buffer, const size_t new_size)
         new_capacity *= 2;
     }
 
-    printf("Resize: %zu -> %zu\n", buffer->capacity, new_capacity);
+    // printf("Resize: %zu -> %zu\n", buffer->capacity, new_capacity);
 
     char* new_data = realloc(buffer->data, new_capacity);
     if (new_data == nullptr)

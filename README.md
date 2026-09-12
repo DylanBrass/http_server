@@ -14,7 +14,8 @@ Everything is implemented on top of POSIX sockets and the standard C library onl
 - A small routing API: register a handler per (method, path) pair, backed by a route table that grows dynamically (`realloc`) instead of a fixed-size array
 - Per-connection read buffer that grows dynamically (`realloc`) as data arrives, instead of a fixed-size buffer
 - Structured `Request` / `Response` types passed to and returned from handlers
-- Graceful shutdown on `SIGINT`/`SIGTERM` via `sigaction`
+- Fixed-size worker thread pool (`THREAD_POOL_SIZE`) that handles connections concurrently, backed by a bounded, synchronized connection queue (mutex + condition variables) — the accept loop only ever pushes fds; workers pop and handle them
+- Graceful shutdown on `SIGINT`/`SIGTERM` via `sigaction`, including a coordinated queue shutdown (broadcast + `pthread_join` on every worker) before cleanup
 - Built as a static library (`httpserver`) consumed by a separate example executable (`dashboard_server`)
 
 ## Project structure
@@ -29,6 +30,8 @@ http_server/
 │   └── utils/
 │       ├── buffer.c        # Dynamic (realloc-based) growable buffer used for connection reads
 │       ├── buffer.h        # Buffer type and API
+│       ├── queue.c         # Thread-safe bounded connection queue (mutex + condition variables)
+│       ├── queue.h         # ConnectionQueue type and API
 │       └── str_functions.c # Hand-written string utilities (length, compare, copy, search)
 ├── example/
 │   └── main.c              # Example consumer: registers routes, starts the server
@@ -103,5 +106,6 @@ int main(void)
 
 - No HTTPS/TLS support
 - No support for `Transfer-Encoding: chunked` bodies
+- No HTTP keep-alive — every connection is closed after a single request/response, so clients that expect to reuse a connection (e.g. most HTTP/1.1 clients by default) will see the connection drop and open a new one for each request
 - A few header-value fields (HTTP method, `Content-Type`) are parsed into small fixed-size stack buffers sized for well-formed input; malformed or oversized values aren't yet bounds-checked against these buffers, so this needs hardening before being exposed to untrusted clients
 - The request line parser (`parse_uri`) assumes a well-formed `METHOD /path HTTP/x.x` line; a request line missing its second space is not yet handled defensively

@@ -3,6 +3,9 @@
 //
 #include "queue.h"
 
+#include <stdio.h>
+#include <string.h>
+
 int queue_init(ConnectionQueue* queue)
 {
     queue->count = 0;
@@ -81,22 +84,27 @@ int pop_connection(ConnectionQueue* queue)
     return value;
 }
 
+
 int queue_destroy(ConnectionQueue* queue)
 {
     bool error = false;
+    int return_code;
 
-    if (pthread_mutex_destroy(&queue->mutex) != 0)
+    if ((return_code = pthread_mutex_destroy(&queue->mutex)) != 0)
     {
+        fprintf(stderr, "pthread_mutex_destroy failed: %s\n", strerror(return_code));
         error = true;
     }
 
-    if (pthread_cond_destroy(&queue->not_empty) != 0)
+    if ((return_code = pthread_cond_destroy(&queue->not_empty)) != 0)
     {
+        fprintf(stderr, "pthread_cond_destroy (not_empty) failed: %s\n", strerror(return_code));
         error = true;
     }
 
-    if (pthread_cond_destroy(&queue->not_full) != 0)
+    if ((return_code = pthread_cond_destroy(&queue->not_full)) != 0)
     {
+        fprintf(stderr, "pthread_cond_destroy (not_full) failed: %s\n", strerror(return_code));
         error = true;
     }
 

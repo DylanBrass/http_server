@@ -338,7 +338,10 @@ void run_server(const int socket_descriptor)
         pthread_join(workers[i], nullptr);
     }
 
-    queue_destroy(&queue);
+    if (queue_destroy(&queue) < 0)
+    {
+        fprintf(stderr, "Failed to destroy the queue\n");
+    }
 }
 
 int start_server(const int port)

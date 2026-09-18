@@ -72,11 +72,29 @@ enum HTTP_METHOD parse_http_method(const char* buffer)
 void parse_uri(const char* buffer, char* uri_out)
 {
     const int first_space = find_str_in_str(buffer, " ", 0, 1);
+
+    // if there is no space (first and second), it's a malform request
+    if (first_space == -1)
+    {
+        uri_out[0] = '\0';
+        return;
+    }
+
     const int second_space = find_str_in_str(buffer, " ", first_space + 1, 1);
+
+    if (second_space == -1)
+    {
+        uri_out[0] = '\0';
+        return;
+    }
 
     const size_t path_len = second_space - first_space - 1;
 
-    string_copy(uri_out, buffer + first_space + 1, path_len + 1);
+    // Limit to URI_MAX_LENGTH so an overly long path can't overflow the
+    // caller's fixed-size uri buffer; string_copy will truncate at max_len - 1.
+    const size_t copy_len = path_len + 1 < URI_MAX_LENGTH ? path_len + 1 : URI_MAX_LENGTH;
+
+    string_copy(uri_out, buffer + first_space + 1, copy_len);
 }
 
 enum CONTENT_TYPE parse_content_type(const char* buffer)
@@ -127,6 +145,49 @@ size_t parse_content_length(const char* buffer)
     }
 
     return result;
+}
+
+enum HTTP_VERSION parse_http_version(const char* buffer)
+{
+    const int first_space = find_str_in_str(buffer, " ", 0, 1);
+    const int second_space = find_str_in_str(buffer, " ", first_space + 1, 1);
+    if (first_space == -1 || second_space == -1) return HTTP_VERSION_UNKNOWN;
+
+    const int line_end = find_str_in_str(buffer + second_space + 1, "\r\n", 0, 1);
+    if (line_end == -1) return HTTP_VERSION_UNKNOWN;
+
+    char version_str[16];
+    string_copy(version_str, buffer + second_space + 1, line_end + 1);
+
+    if (string_compare(version_str, "HTTP/1.1") == 0) return HTTP_1_1;
+    if (string_compare(version_str, "HTTP/1.0") == 0) return HTTP_1_0;
+
+    return HTTP_VERSION_UNKNOWN;
+}
+
+bool parse_keep_alive(const char* buffer)
+{
+    const enum HTTP_VERSION version = parse_http_version(buffer);
+    const int label_pos = find_str_in_str(buffer, HEADER_CONNECTION, 0, 1);
+
+    if (label_pos == -1)
+    {
+        // if http 1.1, we default to true for the keep alive
+        // otherwise false
+        return version == HTTP_1_1;
+    }
+
+    const size_t value_start = label_pos + HEADER_CONNECTION_LEN;
+    const int line_end = find_str_in_str(buffer + value_start, "\r\n", 0, 1);
+    if (line_end == -1) return version == HTTP_1_1;
+
+    char connection_value[32];
+    string_copy(connection_value, buffer + value_start, line_end + 1);
+
+    if (string_compare(connection_value, "close") == 0) return false;
+    if (string_compare(connection_value, "keep-alive") == 0) return true;
+
+    return version == HTTP_1_1;
 }
 
 void route_cleanup()

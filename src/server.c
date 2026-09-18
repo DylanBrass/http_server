@@ -2,12 +2,14 @@
 // Created by dylanbrass on 2026-09-06.
 //
 
+#include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include "httpserver.h"
 #include <signal.h>
+#include <sys/time.h>
 
 #include "utils/buffer.h"
 #include "utils/queue.h"
@@ -60,7 +62,7 @@ const char* get_content_type_text(const enum CONTENT_TYPE content_type)
     }
 }
 
-void write_http_header(const int current_connection, const Response response)
+void write_http_header(const int current_connection, const Response response, const bool keep_alive)
 {
     char response_headers[RESPONSE_HEADER_SIZE] = {0};
     snprintf(
@@ -69,11 +71,13 @@ void write_http_header(const int current_connection, const Response response)
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
+        "Connection: %s\r\n"
         "\r\n",
         response.status_code,
         get_status_text(response.status_code),
         get_content_type_text(response.content_type),
-        response.body_length
+        response.body_length,
+        keep_alive ? "keep-alive" : "close"
     );
 
     write(current_connection, response_headers, get_length(response_headers));
@@ -85,7 +89,7 @@ void write_error_response(const int current_connection, const int status_code, c
         .status_code = status_code, .content_type = TEXT_HTML, .body = body,
         .body_length = get_length(body)
     };
-    write_http_header(current_connection, response);
+    write_http_header(current_connection, response, false);
     write(current_connection, response.body, response.body_length);
 }
 
@@ -179,89 +183,88 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
 
 int handle_client_connection(const int current_connection, Buffer* buffer)
 {
-    // printf("Client connected\n");
-
-    ssize_t total_bytes_read = 0;
-    bool headers_complete = false;
+    int requests_served = 0;
 
     while (true)
     {
-        if ((size_t)total_bytes_read >= MAX_HEADER_SIZE)
+        ssize_t total_bytes_read = 0;
+
+        while (true)
         {
-            write_error_response(current_connection, 400, "<h1>400 Bad Request - Headers Too Large</h1>");
+            if ((size_t)total_bytes_read >= MAX_HEADER_SIZE)
+            {
+                write_error_response(current_connection, 400, "<h1>400 Bad Request - Headers Too Large</h1>");
+                free_buffer(buffer);
+                close(current_connection);
+                return 0;
+            }
+
+            if (allocate_buffer(buffer, total_bytes_read + GROWTH_CHUNK) < 0)
+            {
+                perror("buffer allocation failed");
+                free_buffer(buffer);
+                close(current_connection);
+                return 0;
+            }
+
+            const ssize_t bytes_read = read(current_connection, buffer->data + total_bytes_read,
+                                            buffer->capacity - 1 - total_bytes_read);
+
+            if (bytes_read <= 0)
+            {
+                free_buffer(buffer);
+                close(current_connection);
+                return 0;
+            }
+
+            total_bytes_read += bytes_read;
+            buffer->data[total_bytes_read] = '\0';
+
+            if (find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1) != -1)
+            {
+                break;
+            }
+        }
+
+        char uri[URI_MAX_LENGTH];
+        parse_uri(buffer->data, uri);
+
+        const enum HTTP_METHOD http_method = parse_http_method(buffer->data);
+        const RouteHandler handler = find_route(http_method, uri);
+
+        Request request;
+        const int result = add_request_body(buffer, current_connection, total_bytes_read, &request);
+
+        if (result < 0)
+        {
+            free_buffer(buffer);
+            close(current_connection);
+            return -1;
+        }
+
+        request.method = http_method;
+        string_copy(request.uri, uri, URI_MAX_LENGTH);
+        request.content_type = parse_content_type(buffer->data);
+
+        requests_served++;
+        // Limit the amount of requests a specific connection can do after being kept alive
+        // this is to avoid a specific client from holding a thread forever and
+        // allow other connections to be handled.
+        const bool keep_alive = parse_keep_alive(buffer->data)
+            && requests_served < MAX_KEEPALIVE_REQUESTS;
+
+        const Response response = create_response(handler, &request);
+
+        write_http_header(current_connection, response, keep_alive);
+        write(current_connection, response.body, response.body_length);
+
+        if (!keep_alive)
+        {
             free_buffer(buffer);
             close(current_connection);
             return 0;
         }
-
-        if (allocate_buffer(buffer, total_bytes_read + GROWTH_CHUNK) < 0)
-        {
-            perror("buffer allocation failed");
-            break;
-        }
-
-        // Takes the buffer->data memory addr (+ what is already read to not overwrite)
-        // and writes the data from the connection to that char* (aka buffer->data)
-        const ssize_t bytes_read = read(current_connection, buffer->data + total_bytes_read,
-                                        buffer->capacity - 1 - total_bytes_read);
-
-        if (bytes_read <= 0)
-        {
-            perror("read failed");
-            break;
-        }
-
-        total_bytes_read += bytes_read;
-        // Indicate where the string ends in the buffer->data
-        buffer->data[total_bytes_read] = '\0';
-
-        if (find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1) != -1)
-        {
-            headers_complete = true;
-            break;
-        }
     }
-
-    // Make sure the header was read completely
-    if (!headers_complete)
-    {
-        free_buffer(buffer);
-        close(current_connection);
-        return 0;
-    }
-
-    char uri[URI_MAX_LENGTH];
-    parse_uri(buffer->data, uri);
-
-    const enum HTTP_METHOD http_method = parse_http_method(buffer->data);
-
-    const RouteHandler handler = find_route(http_method, uri);
-
-    // printf("method=%d uri=%s\n", http_method, uri);
-
-    Request request;
-    const int result = add_request_body(buffer, current_connection, total_bytes_read, &request);
-
-    if (result < 0)
-    {
-        free_buffer(buffer);
-        close(current_connection);
-        return -1;
-    }
-
-    request.method = http_method;
-    string_copy(request.uri, uri, URI_MAX_LENGTH);
-    request.content_type = parse_content_type(buffer->data);
-
-    const Response response = create_response(handler, &request);
-
-    write_http_header(current_connection, response);
-    write(current_connection, response.body, response.body_length);
-
-    free_buffer(buffer);
-    close(current_connection);
-    return 0;
-    // printf("Client disconnected\n");
 }
 
 void* handle_incoming_thread(void* arg)
@@ -275,6 +278,17 @@ void* handle_incoming_thread(void* arg)
         if (current_connection < 0)
         {
             break;
+        }
+
+        // Creates a timeout of 5 seconds and 0 microseconds aka 5.0
+        const struct timeval timeout = {.tv_sec = KEEP_ALIVE_TIMEOUT_SECONDS, .tv_usec = 0};
+        // set the sock option to timeout after the timeout set above.
+        // SO_RCVTIMEO is the option to modify to set the timeout.
+        // This is so a worker does not get stuck forever if it crashes
+        // or the connection stop sending requests.
+        if (setsockopt(current_connection, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
+        {
+            perror("setsockopt SO_RCVTIMEO failed");
         }
 
         Buffer buffer = {0};
@@ -318,9 +332,17 @@ void run_server(const int socket_descriptor)
 
         if (current_connection < 0)
         {
-            if (should_shutdown)
+            if (should_shutdown) break;
+
+            if (errno == EMFILE || errno == ENFILE)
             {
-                break;
+                usleep(1000);
+                continue;
+            }
+
+            if (errno == EINTR)
+            {
+                continue;
             }
 
             perror("accept failed");
@@ -399,7 +421,6 @@ int start_server(const int port)
         return -1;
     }
 
-    // 10 is the max number of pending (not yet accepted) connections that can be in the queue
     const int listen_result = listen(socket_descriptor, MAX_CONNECTIONS);
 
     if (listen_result < 0)
@@ -408,7 +429,9 @@ int start_server(const int port)
         return -1;
     }
 
-    printf("Server listening on port 8080\n");
+    printf("Server listening on port %d\n", port);
+    // Handle the pipe broken errors
+    signal(SIGPIPE, SIG_IGN);
 
     struct sigaction sa;
     sa.sa_handler = handle_shutdown_signal;

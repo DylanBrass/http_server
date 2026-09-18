@@ -17,6 +17,12 @@
 // - 1 to take into account \0 (the indication of the end of string
 #define HEADER_CONTENT_LENGTH_LEN (sizeof(HEADER_CONTENT_LENGTH) - 1)
 
+#define HEADER_CONNECTION "Connection: "
+#define HEADER_CONNECTION_LEN (sizeof(HEADER_CONNECTION) - 1)
+
+#define KEEP_ALIVE_TIMEOUT_SECONDS 5
+#define MAX_KEEPALIVE_REQUESTS 1000
+
 #define RESPONSE_HEADER_SIZE 256
 
 #define INIT_BUFFER_SIZE 1024
@@ -26,8 +32,8 @@
 #define MAX_REQUEST_SIZE 1048576
 #define MAX_HEADER_SIZE 16384
 
-#define MAX_CONNECTIONS 25
-#define THREAD_POOL_SIZE 8
+#define MAX_CONNECTIONS 2048
+#define THREAD_POOL_SIZE 1024
 
 int start_server(int port);
 
@@ -85,6 +91,13 @@ typedef struct Route
     RouteHandler handler;
 } Route;
 
+enum HTTP_VERSION
+{
+    HTTP_1_0,
+    HTTP_1_1,
+    HTTP_VERSION_UNKNOWN,
+};
+
 int register_route(enum HTTP_METHOD http_method, enum CONTENT_TYPE request_body_content_type
                    , const char* uri, RouteHandler handler);
 
@@ -97,6 +110,10 @@ enum HTTP_METHOD parse_http_method(const char* buffer);
 enum CONTENT_TYPE parse_content_type(const char* buffer);
 
 size_t parse_content_length(const char* buffer);
+
+enum HTTP_VERSION parse_http_version(const char* buffer);
+
+bool parse_keep_alive(const char* buffer);
 
 void route_cleanup();
 

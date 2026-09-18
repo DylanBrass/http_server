@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include "httpserver.h"
 #include <signal.h>
+#include <stdint.h>
 #include <sys/time.h>
 
 #include "utils/buffer.h"
@@ -126,8 +127,25 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
     else
     {
         const size_t body_start = headers_end + HTTP_DELIMITER_LEN;
-        const size_t content_length = parse_content_length(buffer->data);
-        const size_t target_total = body_start + content_length;
+        const ContentLengthResult content_length_result = parse_content_length(buffer->data);
+
+        if (!content_length_result.is_valid)
+        {
+            write_error_response(current_connection, 400, "<h1>400 Bad Request</h1>");
+            free_buffer(buffer);
+            close(current_connection);
+            return -1;
+        }
+
+        if (body_start > SIZE_MAX - content_length_result.value )
+        {
+            write_error_response(current_connection, 413, "<h1>413 Oversized request</h1>");
+            free_buffer(buffer);
+            close(current_connection);
+            return -1;
+        }
+
+        const size_t target_total = body_start + content_length_result.value;
 
         if (target_total > MAX_REQUEST_SIZE)
         {

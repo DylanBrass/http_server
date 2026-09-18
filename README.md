@@ -1,47 +1,3 @@
-# http_server
-
-A minimal HTTP/1.1 server written from scratch in C — no external HTTP, socket, or string libraries. Built as a learning project to explore raw TCP sockets, manual HTTP parsing, and library/API design in C.
-
-Everything is implemented on top of POSIX sockets and the standard C library only: request parsing, routing, and even core string utilities (`strlen`, `strcmp`, `strcpy`, `strstr` equivalents) are hand-written rather than pulled from `<string.h>`.
-
-## Features
-
-- Raw TCP socket server (`socket`/`bind`/`listen`/`accept`) with `SO_REUSEADDR`
-- Hand-written HTTP/1.1 request parsing: method, URI, headers, and body
-- Support for `GET`, `POST`, `PUT`, and `DELETE`
-- Request bodies read according to `Content-Length`, exposed to handlers
-- `Content-Type` parsing for incoming requests
-- A small routing API: register a handler per (method, path) pair, backed by a route table that grows dynamically (`realloc`) instead of a fixed-size array
-- Per-connection read buffer that grows dynamically (`realloc`) as data arrives, instead of a fixed-size buffer
-- Structured `Request` / `Response` types passed to and returned from handlers
-- HTTP/1.1 keep-alive: connections are reused across requests based on the `Connection` header (defaulting to keep-alive on HTTP/1.1, close on HTTP/1.0), capped per connection by `MAX_KEEPALIVE_REQUESTS` so a single client can't monopolize a worker thread
-- Per-connection idle timeout (`SO_RCVTIMEO`, `KEEP_ALIVE_TIMEOUT_SECONDS`) so a worker isn't stuck forever on a stalled or abandoned connection
-- Request size limits: oversized headers return `400 Bad Request` (`MAX_HEADER_SIZE`) and oversized bodies return `413 Content Too Large` (`MAX_REQUEST_SIZE`)
-- Fixed-size worker thread pool (`THREAD_POOL_SIZE`) that handles connections concurrently, backed by a bounded, synchronized connection queue (mutex + condition variables) — the accept loop only ever pushes fds; workers pop and handle them
-- Graceful shutdown on `SIGINT`/`SIGTERM` via `sigaction`, including a coordinated queue shutdown (broadcast + `pthread_join` on every worker) before cleanup
-- Built as a static library (`httpserver`) consumed by a separate example executable (`dashboard_server`)
-
-## Project structure
-
-```
-http_server/
-├── include/
-│   └── httpserver.h       # Public API: types, enums, function declarations
-├── src/
-│   ├── server.c            # Socket lifecycle, request/response I/O, shutdown handling
-│   ├── router.c            # Route registration/matching, request-line & header parsing
-│   └── utils/
-│       ├── buffer.c        # Dynamic (realloc-based) growable buffer used for connection reads
-│       ├── buffer.h        # Buffer type and API
-│       ├── queue.c         # Thread-safe bounded connection queue (mutex + condition variables)
-│       ├── queue.h         # ConnectionQueue type and API
-│       └── str_functions.c # Hand-written string utilities (length, compare, copy, search)
-├── example/
-│   └── main.c              # Example consumer: registers routes, starts the server
-├── www/
-│   └── test.html            # Sample static file served by the example
-└── CMakeLists.txt
-```
 
 ## Building
 
@@ -105,6 +61,16 @@ int main(void)
 }
 ```
 
+## Concurrency model and its limits
+
+This server uses **thread-per-connection**: each accepted connection is handed to one worker thread from a fixed-size pool (`THREAD_POOL_SIZE`), and that thread stays dedicated to that connection for as long as it stays open.
+
+With HTTP keep-alive enabled, a connection can stay open for many requests in a row, which means **`THREAD_POOL_SIZE` is a hard ceiling on the number of concurrent persistent connections the server can actively serve**, not just a throughput knob. If more clients hold open keep-alive connections than there are worker threads, the excess connections queue (up to `MAX_CONNECTIONS`) and wait for a worker to free up — which only happens when some other client's connection closes, sends its `MAX_KEEPALIVE_REQUESTS`th request, or goes idle past the keep-alive timeout.
+
+This is an intentional simplicity tradeoff for a from-scratch learning project, not a bug: thread-per-connection is straightforward to reason about, but doesn't scale to large numbers of concurrent (mostly idle) persistent connections the way an event-loop model (`epoll`/`kqueue`-based, multiplexing many connections per thread) does. Raising `THREAD_POOL_SIZE` trades memory/OS thread overhead directly for more concurrent connection capacity, and is a reasonable knob for testing or moderate concurrency — but it doesn't scale indefinitely the way a real event loop would.
+
+If you're benchmarking this yourself: be aware that repeated short-lived-connection benchmark runs (e.g. without keep-alive, or against a client that doesn't reuse connections) can leave many sockets in `TIME_WAIT` on the machine running the benchmark. Back-to-back runs, especially at high concurrency, can appear to slow down purely from ephemeral port/`TIME_WAIT` pressure left over from the previous run rather than from anything in the server itself — leave a short gap between runs, or reduce concurrency/request count, for more comparable results.
+
 ## Possible/Known limitations
 
 - No HTTPS/TLS support
@@ -114,11 +80,11 @@ int main(void)
 - Routing is exact-match only — no path parameters (`/users/:id`) or wildcards
 - A route's declared `request_body_content_type` is stored at registration but never validated against the incoming request's actual `Content-Type`
 - No URL decoding or query-string parsing — the request path is matched literally, so `%20`-style escapes and `?key=value` query strings aren't handled
-- A fixed pool of `THREAD_POOL_SIZE` (1024) OS threads is spawned unconditionally at startup rather than using an event-driven (e.g. epoll) model, which is comparatively heavy on memory/OS resources and isn't adjustable at runtime
+- Concurrent persistent (keep-alive) connections are capped by `THREAD_POOL_SIZE` — see "Concurrency model and its limits" above. A fixed pool of `THREAD_POOL_SIZE` (1024) OS threads is spawned unconditionally at startup rather than using an event-driven (e.g. epoll) model, which is comparatively heavy on memory/OS resources and isn't adjustable at runtime
+- A keep-alive connection's read buffer is never shrunk back down after growing to accommodate a large request body, so a connection that sent one large request early on keeps that memory allocated for its full lifetime
 - `register_route` is not thread-safe; all routes must be registered before `start_server()` begins accepting connections
 - No access/request logging
-- A few header-value fields (HTTP method, `Content-Type`) are parsed into small fixed-size stack buffers sized for well-formed input; malformed or oversized values aren't yet bounds-checked against these buffers, so this needs hardening before being exposed to untrusted clients
-- `parse_content_length` accumulates digits into a `size_t` with no overflow check or digit-count cap; an oversized `Content-Length` value can wrap around, and a resulting `target_total` smaller than `body_start` would underflow the `size_t` subtraction in `add_request_body`, producing a bogus (potentially huge) `body_length`
+- A few header-value fields (HTTP method, `Content-Type`, `Connection`, `HTTP` version token) are parsed into small fixed-size stack buffers sized for well-formed input; malformed or oversized values aren't yet bounds-checked against these buffers, so this needs hardening before being exposed to untrusted clients
 - `write()` calls (in `write_http_header`, `write_error_response`, and the response body writes in `handle_client_connection`) aren't checked for partial writes; `write()` may send fewer bytes than requested, which today would silently truncate a response and desync a kept-alive connection
 - Only an idle timeout is enforced (`SO_RCVTIMEO`), and it resets on every successful `read()` no matter how few bytes were read; a client that trickles in a byte or two just before each timeout expires can hold a worker thread indefinitely without ever completing a request (a Slowloris-style pattern) — there's no overall wall-clock deadline for finishing a request's headers or body
 - No validation that HTTP/1.1 requests include a `Host` header, which the spec requires

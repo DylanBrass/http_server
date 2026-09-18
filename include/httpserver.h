@@ -81,6 +81,12 @@ typedef struct
     size_t body_length;
 } Request;
 
+typedef struct
+{
+    size_t value;
+    bool is_valid;
+} ContentLengthResult;
+
 typedef Response (*RouteHandler)(const Request* request);
 
 typedef struct Route
@@ -109,7 +115,7 @@ enum HTTP_METHOD parse_http_method(const char* buffer);
 
 enum CONTENT_TYPE parse_content_type(const char* buffer);
 
-size_t parse_content_length(const char* buffer);
+ContentLengthResult parse_content_length(const char* buffer);
 
 enum HTTP_VERSION parse_http_version(const char* buffer);
 

@@ -1,6 +1,7 @@
 //
 // Created by dylanbrass on 2026-09-06.
 //
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -122,14 +123,17 @@ enum CONTENT_TYPE parse_content_type(const char* buffer)
     return CONTENT_TYPE_NONE;
 }
 
-size_t parse_content_length(const char* buffer)
+ContentLengthResult parse_content_length(const char* buffer)
 {
     const int label_pos = find_str_in_str(buffer, HEADER_CONTENT_LENGTH, 0, 1);
 
     // If we do not see the header, this means there is no body
     if (label_pos == -1)
     {
-        return 0;
+        return (ContentLengthResult){
+            0,
+            true
+        };
     }
 
     const size_t value_start = label_pos + HEADER_CONTENT_LENGTH_LEN;
@@ -138,13 +142,39 @@ size_t parse_content_length(const char* buffer)
     size_t i = 0;
     while (buffer[value_start + i] >= '0' && buffer[value_start + i] <= '9')
     {
+        if (result > SIZE_MAX / 10)
+        {
+            return (ContentLengthResult){
+                0,
+                false
+            };
+        }
+
+        const size_t number = result * 10;
+        const size_t digit = buffer[value_start + i] - '0';
+        if (number > SIZE_MAX - digit)
+        {
+            return (ContentLengthResult){
+                0,
+                false
+            };
+        }
         // Do - '0' (48), so that the number will be given
         // For example 8 is 56 and 0 is 48, 56 - 48 = 8
-        result = result * 10 + (buffer[value_start + i] - '0');
+        result = number + digit;
         i++;
     }
 
-    return result;
+    // header present, but value does not have numbers (letters)
+    if (i == 0)
+    {
+        return (ContentLengthResult){0, false};
+    }
+
+    return (ContentLengthResult){
+        result,
+        true
+    };
 }
 
 enum HTTP_VERSION parse_http_version(const char* buffer)

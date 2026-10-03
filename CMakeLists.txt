@@ -3,6 +3,10 @@ project(http_server C)
 
 set(CMAKE_C_STANDARD 23)
 
+add_compile_options(-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion -Werror)
+add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+add_link_options(-fsanitize=address,undefined)
+
 add_library(httpserver src/server.c src/router.c
         include/httpserver.h
         src/utils/str_functions.c

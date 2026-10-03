@@ -4,6 +4,8 @@
 
 #include <stddef.h>
 
+#include "httpserver.h"
+
 size_t get_length(const char* arr)
 {
     size_t count = 0;
@@ -51,7 +53,8 @@ int string_copy(char* target, const char* source, const size_t max_len)
     return 0;
 }
 
-int find_str_in_str(const char* haystack, const char* needle, const size_t start_from, const size_t target_occurrence)
+StrSearchResult find_str_in_str(const char* haystack, const char* needle, const size_t start_from,
+                                const size_t target_occurrence)
 {
     const size_t needle_len = get_length(needle);
     size_t start = start_from;
@@ -73,12 +76,12 @@ int find_str_in_str(const char* haystack, const char* needle, const size_t start
             if (nb_found == target_occurrence)
             {
                 //return position of the start of the needle in the pattern
-                return (int)start;
+                return (StrSearchResult){start, true};
             }
         }
 
         start++;
     }
 
-    return -1;
+    return (StrSearchResult){0, false};
 }

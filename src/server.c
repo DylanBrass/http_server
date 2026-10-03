@@ -17,8 +17,9 @@
 
 volatile sig_atomic_t should_shutdown = 0;
 
-void handle_shutdown_signal(int _)
+void handle_shutdown_signal(const int _)
 {
+    (void)_;
     should_shutdown = true;
 }
 
@@ -115,33 +116,29 @@ Response create_response(const RouteHandler handler, const Request* request)
 
 int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_already_read, Request* request)
 {
-    const int headers_end = find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1);
+    const StrSearchResult headers_end_search_result = find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1);
 
     char* body;
 
-    if (headers_end == -1)
+    if (!headers_end_search_result.found)
     {
         body = "";
         request->body_length = 0;
     }
     else
     {
-        const size_t body_start = headers_end + HTTP_DELIMITER_LEN;
+        const size_t body_start = headers_end_search_result.position + HTTP_DELIMITER_LEN;
         const ContentLengthResult content_length_result = parse_content_length(buffer->data);
 
         if (!content_length_result.is_valid)
         {
             write_error_response(current_connection, 400, "<h1>400 Bad Request</h1>");
-            free_buffer(buffer);
-            close(current_connection);
             return -1;
         }
 
         if (body_start > SIZE_MAX - content_length_result.value )
         {
             write_error_response(current_connection, 413, "<h1>413 Oversized request</h1>");
-            free_buffer(buffer);
-            close(current_connection);
             return -1;
         }
 
@@ -150,8 +147,6 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
         if (target_total > MAX_REQUEST_SIZE)
         {
             write_error_response(current_connection, 413, "<h1>413 Oversized request</h1>");
-            free_buffer(buffer);
-            close(current_connection);
             return -1;
         }
 
@@ -176,7 +171,7 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
                 break;
             }
 
-            bytes_already_read += bytes_read;
+            bytes_already_read += (size_t)bytes_read;
             buffer->data[bytes_already_read] = '\0';
         }
 
@@ -205,11 +200,11 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
 
     while (true)
     {
-        ssize_t total_bytes_read = 0;
+        size_t total_bytes_read = 0;
 
         while (true)
         {
-            if ((size_t)total_bytes_read >= MAX_HEADER_SIZE)
+            if (total_bytes_read >= MAX_HEADER_SIZE)
             {
                 write_error_response(current_connection, 400, "<h1>400 Bad Request - Headers Too Large</h1>");
                 free_buffer(buffer);
@@ -235,10 +230,10 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
                 return 0;
             }
 
-            total_bytes_read += bytes_read;
+            total_bytes_read += (size_t)bytes_read;
             buffer->data[total_bytes_read] = '\0';
 
-            if (find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1) != -1)
+            if (find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1).found)
             {
                 break;
             }
@@ -384,7 +379,7 @@ void run_server(const int socket_descriptor)
     }
 }
 
-int start_server(const int port)
+int start_server(const uint16_t port)
 {
     // AF_INET = IPV4, SOCK_STREAM = TCP, and 0 = default which is TCP in this case
     const int socket_descriptor = socket(AF_INET, SOCK_STREAM, 0);

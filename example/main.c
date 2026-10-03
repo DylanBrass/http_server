@@ -4,6 +4,8 @@
 
 Response handle_status(const Request* _)
 {
+    (void)_;
+
     static thread_local char json_buffer[256];
     snprintf(json_buffer, sizeof(json_buffer),
         "{\"status\":\"ok\",\"uptime\":%d}", 42);
@@ -16,8 +18,10 @@ Response handle_status(const Request* _)
     };
 }
 
-Response handle_static_page(const Request* request)
+Response handle_static_page(const Request* _)
 {
+    (void)_;
+
     static thread_local char file_buffer[4096];
 
     FILE* fp = fopen("../www/test.html", "r");
@@ -68,8 +72,10 @@ Response handle_update(const Request* request)
     };
 }
 
-Response handle_delete(const Request* request)
+Response handle_delete(const Request* _)
 {
+    (void)_;
+
     // printf("DELETE %s\n", request->uri);
 
     const char* body = "";

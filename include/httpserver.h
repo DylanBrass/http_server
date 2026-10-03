@@ -1,6 +1,8 @@
 //
 // Created by dylanbrass on 2026-09-06.
 //
+#pragma once
+#include <stdint.h>
 
 #ifndef HTTP_SERVER_HTTPSERVER_H
 #define HTTP_SERVER_HTTPSERVER_H
@@ -35,7 +37,7 @@
 #define MAX_CONNECTIONS 2048
 #define THREAD_POOL_SIZE 1024
 
-int start_server(int port);
+int start_server(uint16_t port);
 
 size_t get_length(const char* arr);
 
@@ -43,7 +45,15 @@ int string_compare(const char* str1, const char* str2);
 
 int string_copy(char* target, const char* source, size_t max_len);
 
-int find_str_in_str(const char* haystack, const char* needle, size_t start_from, size_t target_occurrence);
+
+typedef struct
+{
+    size_t position;
+    bool found;
+} StrSearchResult;
+
+
+StrSearchResult find_str_in_str(const char* haystack, const char* needle, size_t start_from, size_t target_occurrence);
 
 enum HTTP_METHOD
 {
@@ -107,7 +117,7 @@ enum HTTP_VERSION
 int register_route(enum HTTP_METHOD http_method, enum CONTENT_TYPE request_body_content_type
                    , const char* uri, RouteHandler handler);
 
-RouteHandler find_route(enum HTTP_METHOD http_method, char* uri);
+RouteHandler find_route(const enum HTTP_METHOD http_method, const char* uri);
 
 void parse_uri(const char* buffer, char* uri_out);
 

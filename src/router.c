@@ -9,15 +9,15 @@
 #define DEFAULT_ROUTE_LIMIT 5
 
 static Route* routes = nullptr;
-static int route_capacity = 0;
-static int route_count = 0;
+static size_t route_capacity = 0;
+static size_t route_count = 0;
 
 int register_route(const enum HTTP_METHOD http_method, const enum CONTENT_TYPE request_body_content_type,
                    const char* uri, const RouteHandler handler)
 {
     if (route_count == route_capacity)
     {
-        const int new_capacity = route_capacity == 0 ? DEFAULT_ROUTE_LIMIT : route_capacity * 2;
+        const size_t new_capacity = route_capacity == 0 ? DEFAULT_ROUTE_LIMIT : route_capacity * 2;
         Route* new_routes = realloc(routes, new_capacity * sizeof(Route));
 
         if (new_routes == nullptr)
@@ -41,9 +41,9 @@ int register_route(const enum HTTP_METHOD http_method, const enum CONTENT_TYPE r
     return 0;
 }
 
-RouteHandler find_route(enum HTTP_METHOD http_method, char* uri)
+RouteHandler find_route(const enum HTTP_METHOD http_method, const char* uri)
 {
-    for (int i = 0; i < route_count; i++)
+    for (size_t i = 0; i < route_count; i++)
     {
         if (http_method == routes[i].http_method && string_compare(uri, routes[i].uri) == 0)
         {
@@ -55,12 +55,15 @@ RouteHandler find_route(enum HTTP_METHOD http_method, char* uri)
 
 enum HTTP_METHOD parse_http_method(const char* buffer)
 {
-    const int space_pos = find_str_in_str(buffer, " ", 0, 1);
-    if (space_pos == -1) return UNKNOWN;
+    const StrSearchResult search_result = find_str_in_str(buffer, " ", 0, 1);
+    if (!search_result.found) return UNKNOWN;
 
     char method_str[16];
 
-    string_copy(method_str, buffer, space_pos + 1);
+    const size_t method_len = search_result.position;
+    const size_t copy_len = method_len + 1 < sizeof(method_str) ? method_len + 1 : sizeof(method_str);
+
+    string_copy(method_str, buffer, copy_len);
 
     if (string_compare(method_str, "GET") == 0) return GET;
     if (string_compare(method_str, "POST") == 0) return POST;
@@ -72,24 +75,26 @@ enum HTTP_METHOD parse_http_method(const char* buffer)
 
 void parse_uri(const char* buffer, char* uri_out)
 {
-    const int first_space = find_str_in_str(buffer, " ", 0, 1);
+    const StrSearchResult first_space_search_result = find_str_in_str(buffer, " ", 0, 1);
 
     // if there is no space (first and second), it's a malform request
-    if (first_space == -1)
+    if (!first_space_search_result.found)
     {
         uri_out[0] = '\0';
         return;
     }
 
-    const int second_space = find_str_in_str(buffer, " ", first_space + 1, 1);
+    const size_t first_space = first_space_search_result.position;
 
-    if (second_space == -1)
+    const StrSearchResult second_space_search_result = find_str_in_str(buffer, " ", first_space + 1, 1);
+
+    if (!second_space_search_result.found)
     {
         uri_out[0] = '\0';
         return;
     }
 
-    const size_t path_len = second_space - first_space - 1;
+    const size_t path_len = second_space_search_result.position - first_space - 1;
 
     // Limit to URI_MAX_LENGTH so an overly long path can't overflow the
     // caller's fixed-size uri buffer; string_copy will truncate at max_len - 1.
@@ -100,19 +105,25 @@ void parse_uri(const char* buffer, char* uri_out)
 
 enum CONTENT_TYPE parse_content_type(const char* buffer)
 {
-    const int label_pos = find_str_in_str(buffer, HEADER_CONTENT_TYPE, 0, 1);
+    const StrSearchResult search_result_start = find_str_in_str(buffer, HEADER_CONTENT_TYPE, 0, 1);
 
-    if (label_pos == -1)
+    if (!search_result_start.found)
     {
         return CONTENT_TYPE_NONE;
     }
 
-    const size_t value_start = label_pos + HEADER_CONTENT_TYPE_LEN;
-    const int line_end = find_str_in_str(buffer + value_start, "\r\n", 0, 1);
-    if (line_end == -1) return CONTENT_TYPE_NONE;
+    const size_t value_start = search_result_start.position + HEADER_CONTENT_TYPE_LEN;
+    const StrSearchResult search_result_end = find_str_in_str(buffer + value_start, "\r\n", 0, 1);
+
+    if (!search_result_end.found) return CONTENT_TYPE_NONE;
+
+    const size_t line_end = search_result_end.position;
 
     char content_type_str[64];
-    string_copy(content_type_str, buffer + value_start, line_end + 1);
+
+    const size_t copy_length = line_end + 1 < sizeof(content_type_str) ? line_end + 1 : sizeof(content_type_str);
+
+    string_copy(content_type_str, buffer + value_start, copy_length);
 
     if (string_compare(content_type_str, "text/html") == 0) return TEXT_HTML;
     if (string_compare(content_type_str, "application/json") == 0) return APPLICATION_JSON;
@@ -125,10 +136,10 @@ enum CONTENT_TYPE parse_content_type(const char* buffer)
 
 ContentLengthResult parse_content_length(const char* buffer)
 {
-    const int label_pos = find_str_in_str(buffer, HEADER_CONTENT_LENGTH, 0, 1);
+    const StrSearchResult search_result = find_str_in_str(buffer, HEADER_CONTENT_LENGTH, 0, 1);
 
     // If we do not see the header, this means there is no body
-    if (label_pos == -1)
+    if (!search_result.found)
     {
         return (ContentLengthResult){
             0,
@@ -136,7 +147,7 @@ ContentLengthResult parse_content_length(const char* buffer)
         };
     }
 
-    const size_t value_start = label_pos + HEADER_CONTENT_LENGTH_LEN;
+    const size_t value_start = search_result.position + HEADER_CONTENT_LENGTH_LEN;
 
     size_t result = 0;
     size_t i = 0;
@@ -151,7 +162,8 @@ ContentLengthResult parse_content_length(const char* buffer)
         }
 
         const size_t number = result * 10;
-        const size_t digit = buffer[value_start + i] - '0';
+        const size_t digit = (size_t)(buffer[value_start + i] - '0');
+
         if (number > SIZE_MAX - digit)
         {
             return (ContentLengthResult){
@@ -179,15 +191,26 @@ ContentLengthResult parse_content_length(const char* buffer)
 
 enum HTTP_VERSION parse_http_version(const char* buffer)
 {
-    const int first_space = find_str_in_str(buffer, " ", 0, 1);
-    const int second_space = find_str_in_str(buffer, " ", first_space + 1, 1);
-    if (first_space == -1 || second_space == -1) return HTTP_VERSION_UNKNOWN;
+    const StrSearchResult first_space_search_result = find_str_in_str(buffer, " ", 0, 1);
+    if (!first_space_search_result.found) return HTTP_VERSION_UNKNOWN;
 
-    const int line_end = find_str_in_str(buffer + second_space + 1, "\r\n", 0, 1);
-    if (line_end == -1) return HTTP_VERSION_UNKNOWN;
+    const size_t first_space = first_space_search_result.position;
+
+    const StrSearchResult second_space_search_result = find_str_in_str(buffer, " ", first_space + 1, 1);
+    if (!second_space_search_result.found) return HTTP_VERSION_UNKNOWN;
+
+    const size_t second_space = second_space_search_result.position;
+
+    const StrSearchResult line_end_search_result = find_str_in_str(buffer + second_space + 1, "\r\n", 0, 1);
+    if (!line_end_search_result.found) return HTTP_VERSION_UNKNOWN;
+
+    const size_t line_end = line_end_search_result.position;
 
     char version_str[16];
-    string_copy(version_str, buffer + second_space + 1, line_end + 1);
+
+    const size_t copy_length = line_end + 1 < sizeof(version_str) ? line_end + 1 : sizeof(version_str);
+
+    string_copy(version_str, buffer + second_space + 1, copy_length);
 
     if (string_compare(version_str, "HTTP/1.1") == 0) return HTTP_1_1;
     if (string_compare(version_str, "HTTP/1.0") == 0) return HTTP_1_0;
@@ -198,21 +221,26 @@ enum HTTP_VERSION parse_http_version(const char* buffer)
 bool parse_keep_alive(const char* buffer)
 {
     const enum HTTP_VERSION version = parse_http_version(buffer);
-    const int label_pos = find_str_in_str(buffer, HEADER_CONNECTION, 0, 1);
+    const StrSearchResult label_pos_search_result = find_str_in_str(buffer, HEADER_CONNECTION, 0, 1);
 
-    if (label_pos == -1)
+    if (!label_pos_search_result.found)
     {
         // if http 1.1, we default to true for the keep alive
         // otherwise false
         return version == HTTP_1_1;
     }
 
-    const size_t value_start = label_pos + HEADER_CONNECTION_LEN;
-    const int line_end = find_str_in_str(buffer + value_start, "\r\n", 0, 1);
-    if (line_end == -1) return version == HTTP_1_1;
+    const size_t value_start = label_pos_search_result.position + HEADER_CONNECTION_LEN;
+    const StrSearchResult line_end_search_result = find_str_in_str(buffer + value_start, "\r\n", 0, 1);
+    if (!line_end_search_result.found) return version == HTTP_1_1;
+
+    const size_t line_end = line_end_search_result.position;
 
     char connection_value[32];
-    string_copy(connection_value, buffer + value_start, line_end + 1);
+
+    const size_t copy_length = line_end + 1 < sizeof(connection_value) ? line_end + 1 : sizeof(connection_value);
+
+    string_copy(connection_value, buffer + value_start, copy_length);
 
     if (string_compare(connection_value, "close") == 0) return false;
     if (string_compare(connection_value, "keep-alive") == 0) return true;

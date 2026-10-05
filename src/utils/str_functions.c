@@ -18,6 +18,9 @@ size_t get_length(const char* arr)
 
 int string_compare(const char* str1, const char* str2)
 {
+    if (str1 == nullptr && str2 == nullptr) return 0;
+    if (str1 == nullptr || str2 == nullptr) return str1 == nullptr ? -1 : 1;
+
     const size_t str1_len = get_length(str1);
     const size_t str2_len = get_length(str2);
     size_t i = 0;
@@ -40,6 +43,10 @@ int string_compare(const char* str1, const char* str2)
 
 int string_copy(char* target, const char* source, const size_t max_len)
 {
+    if (source == nullptr) return -1;
+    if (target == nullptr) return -1;
+    if (max_len == 0) return -1;
+
     size_t i = 0;
 
     while (i < max_len - 1 && source[i] != '\0')

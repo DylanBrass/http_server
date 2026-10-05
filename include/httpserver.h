@@ -1,11 +1,11 @@
 //
 // Created by dylanbrass on 2026-09-06.
 //
-#pragma once
-#include <stdint.h>
 
 #ifndef HTTP_SERVER_HTTPSERVER_H
 #define HTTP_SERVER_HTTPSERVER_H
+
+#include <stdint.h>
 
 #define HTTP_DELIMITER "\r\n\r\n"
 // - 1 to take into account \0 (the indication of the end of string

@@ -8,19 +8,11 @@
 #include <stdint.h>
 
 #define HTTP_DELIMITER "\r\n\r\n"
-// - 1 to take into account \0 (the indication of the end of string
 #define HTTP_DELIMITER_LEN (sizeof(HTTP_DELIMITER) - 1)
 
-#define HEADER_CONTENT_TYPE "Content-Type: "
-// - 1 to take into account \0 (the indication of the end of string
-#define HEADER_CONTENT_TYPE_LEN (sizeof(HEADER_CONTENT_TYPE) - 1)
-
-#define HEADER_CONTENT_LENGTH "Content-Length: "
-// - 1 to take into account \0 (the indication of the end of string
-#define HEADER_CONTENT_LENGTH_LEN (sizeof(HEADER_CONTENT_LENGTH) - 1)
-
-#define HEADER_CONNECTION "Connection: "
-#define HEADER_CONNECTION_LEN (sizeof(HEADER_CONNECTION) - 1)
+#define HEADER_CONTENT_TYPE "content-type"
+#define HEADER_CONTENT_LENGTH "content-length"
+#define HEADER_CONNECTION "connection"
 
 #define KEEP_ALIVE_TIMEOUT_SECONDS 5
 #define MAX_KEEPALIVE_REQUESTS 1000
@@ -55,6 +47,30 @@ typedef struct
 
 StrSearchResult find_str_in_str(const char* haystack, const char* needle, size_t start_from, size_t target_occurrence);
 
+int string_to_lower(char *str);
+
+char char_to_lower(char c);
+
+enum CASE_SENSITIVITY
+{
+    CASE_SENSITIVE,
+    CASE_INSENSITIVE,
+};
+
+typedef struct
+{
+    const char* data;
+    size_t length;
+} StrSpan;
+
+StrSpan span_from_string(const char* str);
+
+bool span_equals(StrSpan first, StrSpan second, enum CASE_SENSITIVITY case_sensitivity);
+
+bool next_delimited(StrSpan* rest,char separator, StrSpan* item);
+
+StrSpan span_trim(StrSpan span);
+
 enum HTTP_METHOD
 {
     GET,
@@ -69,6 +85,7 @@ enum CONTENT_TYPE
     TEXT_HTML,
     APPLICATION_XML,
     APPLICATION_JSON,
+    APPLICATION_JSON_UTF8,
     IMAGE_JPEG,
     IMAGE_PNG,
     CONTENT_TYPE_NONE,
@@ -96,6 +113,20 @@ typedef struct
     size_t value;
     bool is_valid;
 } ContentLengthResult;
+
+typedef struct
+{
+    StrSpan method;
+    StrSpan uri;
+    StrSpan version;
+} RequestLine;
+
+typedef struct
+{
+    StrSpan value;
+    size_t count;
+    bool conflict;
+} HeaderLookup;
 
 typedef Response (*RouteHandler)(const Request* request);
 

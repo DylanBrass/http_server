@@ -24,3 +24,7 @@ target_link_libraries(dashboard_server httpserver)
 add_executable(test_str_functions tests/test_str_functions.c)
 target_link_libraries(test_str_functions PRIVATE httpserver)
 add_test(NAME str_functions COMMAND test_str_functions)
+
+add_executable(test_parser tests/test_parser.c)
+target_link_libraries(test_parser PRIVATE httpserver)
+add_test(NAME parsing_functions COMMAND test_parser)

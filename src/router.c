@@ -53,167 +53,218 @@ RouteHandler find_route(const enum HTTP_METHOD http_method, const char* uri)
     return nullptr;
 }
 
+static const char* find_crlf(const char* str)
+{
+    for (; *str != '\0'; str++)
+    {
+        if (str[0] == '\r' && str[1] == '\n') return str;
+    }
+    return nullptr;
+}
+
+static const char* skip_leading_crlf(const char* buffer)
+{
+    while (buffer[0] == '\r' && buffer[1] == '\n')
+    {
+        buffer += 2;
+    }
+    return buffer;
+}
+
+static bool split_request_line(const char* buffer, RequestLine* request_line)
+{
+    const char* line_start = skip_leading_crlf(buffer);
+    const char* line_end = find_crlf(line_start);
+    if (line_end == nullptr) return false;
+
+    const char* first_space = line_start;
+    while (first_space < line_end && *first_space != ' ') first_space++;
+    if (first_space == line_start || first_space == line_end) return false;
+
+    const char* uri_start = first_space + 1;
+    const char* second_space = uri_start;
+    while (second_space < line_end && *second_space != ' ') second_space++;
+    if (second_space == uri_start || second_space == line_end) return false;
+
+    const char* version_start = second_space + 1;
+    if (version_start == line_end) return false;
+
+    for (const char* c = version_start; c < line_end; c++)
+    {
+        if (*c == ' ') return false;
+    }
+
+    request_line->method = (StrSpan){line_start, (size_t)(first_space - line_start)};
+    request_line->uri = (StrSpan){uri_start, (size_t)(second_space - uri_start)};
+    request_line->version = (StrSpan){version_start, (size_t)(line_end - version_start)};
+    return true;
+}
+
+static const char* headers_start(const char* buffer)
+{
+    const char* line_end = find_crlf(skip_leading_crlf(buffer));
+    return line_end == nullptr ? nullptr : line_end + 2;
+}
+
+static bool next_header(const char** cursor, StrSpan* name, StrSpan* value)
+{
+    const char* line = *cursor;
+
+    while (line != nullptr && line[0] != '\0' && !(line[0] == '\r' && line[1] == '\n'))
+    {
+        const char* line_end = find_crlf(line);
+        if (line_end == nullptr) break;
+
+        const char* colon = line;
+        while (colon < line_end && *colon != ':') colon++;
+
+        const char* next_line = line_end + 2;
+
+        if (colon != line && colon != line_end)
+        {
+            *name = (StrSpan){line, (size_t)(colon - line)};
+            *value = span_trim((StrSpan){colon + 1, (size_t)(line_end - colon - 1)});
+            *cursor = next_line;
+            return true;
+        }
+
+        line = next_line;
+    }
+
+    *cursor = nullptr;
+    return false;
+}
+
+static HeaderLookup lookup_header(const char* buffer, const char* header_name)
+{
+    HeaderLookup result = {0};
+    const char* cursor = headers_start(buffer);
+    StrSpan name;
+    StrSpan value;
+
+    while (next_header(&cursor, &name, &value))
+    {
+        if (!span_equals(name, span_from_string(header_name), CASE_INSENSITIVE)) continue;
+
+        if (result.count == 0)
+        {
+            result.value = value;
+        }
+        else if (!span_equals(result.value, value, CASE_INSENSITIVE))
+        {
+            result.conflict = true;
+        }
+        result.count++;
+    }
+    return result;
+}
+
 enum HTTP_METHOD parse_http_method(const char* buffer)
 {
-    const StrSearchResult search_result = find_str_in_str(buffer, " ", 0, 1);
-    if (!search_result.found) return UNKNOWN;
+    RequestLine request_line;
+    if (!split_request_line(buffer, &request_line)) return UNKNOWN;
 
-    char method_str[16];
-
-    const size_t method_len = search_result.position;
-    const size_t copy_len = method_len + 1 < sizeof(method_str) ? method_len + 1 : sizeof(method_str);
-
-    string_copy(method_str, buffer, copy_len);
-
-    if (string_compare(method_str, "GET") == 0) return GET;
-    if (string_compare(method_str, "POST") == 0) return POST;
-    if (string_compare(method_str, "PUT") == 0) return PUT;
-    if (string_compare(method_str, "DELETE") == 0) return DELETE;
+    // the method is case-sensitive
+    if (span_equals(request_line.method, span_from_string("GET"), CASE_SENSITIVE)) return GET;
+    if (span_equals(request_line.method, span_from_string("POST"), CASE_SENSITIVE)) return POST;
+    if (span_equals(request_line.method, span_from_string("PUT"), CASE_SENSITIVE)) return PUT;
+    if (span_equals(request_line.method, span_from_string("DELETE"), CASE_SENSITIVE)) return DELETE;
 
     return UNKNOWN;
 }
 
 void parse_uri(const char* buffer, char* uri_out)
 {
-    const StrSearchResult first_space_search_result = find_str_in_str(buffer, " ", 0, 1);
+    uri_out[0] = '\0';
 
-    // if there is no space (first and second), it's a malform request
-    if (!first_space_search_result.found)
-    {
-        uri_out[0] = '\0';
-        return;
-    }
+    RequestLine request_line;
+    if (!split_request_line(buffer, &request_line)) return;
 
-    const size_t first_space = first_space_search_result.position;
+    if (request_line.uri.length >= URI_MAX_LENGTH) return;
 
-    const StrSearchResult second_space_search_result = find_str_in_str(buffer, " ", first_space + 1, 1);
-
-    if (!second_space_search_result.found)
-    {
-        uri_out[0] = '\0';
-        return;
-    }
-
-    const size_t path_len = second_space_search_result.position - first_space - 1;
-
-    // Limit to URI_MAX_LENGTH so an overly long path can't overflow the
-    // caller's fixed-size uri buffer; string_copy will truncate at max_len - 1.
-    const size_t copy_len = path_len + 1 < URI_MAX_LENGTH ? path_len + 1 : URI_MAX_LENGTH;
-
-    string_copy(uri_out, buffer + first_space + 1, copy_len);
+    string_copy(uri_out, request_line.uri.data, request_line.uri.length + 1);
 }
 
 enum CONTENT_TYPE parse_content_type(const char* buffer)
 {
-    const StrSearchResult search_result_start = find_str_in_str(buffer, HEADER_CONTENT_TYPE, 0, 1);
+    const HeaderLookup header = lookup_header(buffer, HEADER_CONTENT_TYPE);
 
-    if (!search_result_start.found)
+    if (header.count == 0 || header.conflict) return CONTENT_TYPE_NONE;
+
+    StrSpan rest = header.value;
+    StrSpan media_type;
+    next_delimited(&rest, ';', &media_type);
+
+    bool has_utf8_charset = false;
+    StrSpan parameter;
+    while (next_delimited(&rest, ';', &parameter))
     {
-        return CONTENT_TYPE_NONE;
+        if (span_equals(parameter, span_from_string("charset=utf-8"), CASE_INSENSITIVE)) has_utf8_charset = true;
     }
 
-    const size_t value_start = search_result_start.position + HEADER_CONTENT_TYPE_LEN;
-    const StrSearchResult search_result_end = find_str_in_str(buffer + value_start, "\r\n", 0, 1);
-
-    if (!search_result_end.found) return CONTENT_TYPE_NONE;
-
-    const size_t line_end = search_result_end.position;
-
-    char content_type_str[64];
-
-    const size_t copy_length = line_end + 1 < sizeof(content_type_str) ? line_end + 1 : sizeof(content_type_str);
-
-    string_copy(content_type_str, buffer + value_start, copy_length);
-
-    if (string_compare(content_type_str, "text/html") == 0) return TEXT_HTML;
-    if (string_compare(content_type_str, "application/json") == 0) return APPLICATION_JSON;
-    if (string_compare(content_type_str, "application/xml") == 0) return APPLICATION_XML;
-    if (string_compare(content_type_str, "image/jpeg") == 0) return IMAGE_JPEG;
-    if (string_compare(content_type_str, "image/png") == 0) return IMAGE_PNG;
+    // media types are case-insensitive (RFC 9110 section 8.3.1)
+    if (span_equals(media_type, span_from_string("text/html"), CASE_INSENSITIVE)) return TEXT_HTML;
+    if (span_equals(media_type, span_from_string("application/json"), CASE_INSENSITIVE))
+    {
+        return has_utf8_charset ? APPLICATION_JSON_UTF8 : APPLICATION_JSON;
+    }
+    if (span_equals(media_type, span_from_string("application/xml"), CASE_INSENSITIVE)) return APPLICATION_XML;
+    if (span_equals(media_type, span_from_string("image/jpeg"), CASE_INSENSITIVE)) return IMAGE_JPEG;
+    if (span_equals(media_type, span_from_string("image/png"), CASE_INSENSITIVE)) return IMAGE_PNG;
 
     return CONTENT_TYPE_NONE;
 }
 
 ContentLengthResult parse_content_length(const char* buffer)
 {
-    const StrSearchResult search_result = find_str_in_str(buffer, HEADER_CONTENT_LENGTH, 0, 1);
+    const HeaderLookup header = lookup_header(buffer, HEADER_CONTENT_LENGTH);
 
     // If we do not see the header, this means there is no body
-    if (!search_result.found)
+    if (header.count == 0)
     {
-        return (ContentLengthResult){
-            0,
-            true
-        };
+        return (ContentLengthResult){0, true};
     }
 
-    const size_t value_start = search_result.position + HEADER_CONTENT_LENGTH_LEN;
-
-    size_t result = 0;
-    size_t i = 0;
-    while (buffer[value_start + i] >= '0' && buffer[value_start + i] <= '9')
-    {
-        if (result > SIZE_MAX / 10)
-        {
-            return (ContentLengthResult){
-                0,
-                false
-            };
-        }
-
-        const size_t number = result * 10;
-        const size_t digit = (size_t)(buffer[value_start + i] - '0');
-
-        if (number > SIZE_MAX - digit)
-        {
-            return (ContentLengthResult){
-                0,
-                false
-            };
-        }
-        // Do - '0' (48), so that the number will be given
-        // For example 8 is 56 and 0 is 48, 56 - 48 = 8
-        result = number + digit;
-        i++;
-    }
-
-    // header present, but value does not have numbers (letters)
-    if (i == 0)
+    // two different lengths, or a header with an empty value
+    if (header.conflict || header.value.length == 0)
     {
         return (ContentLengthResult){0, false};
     }
 
-    return (ContentLengthResult){
-        result,
-        true
-    };
+    size_t result = 0;
+
+    for (size_t i = 0; i < header.value.length; i++)
+    {
+        const char c = header.value.data[i];
+
+        if (c < '0' || c > '9')
+        {
+            return (ContentLengthResult){0, false};
+        }
+
+        // Do - '0' (48), so that the number will be given
+        // For example 8 is 56 and 0 is 48, 56 - 48 = 8
+        const size_t digit = (size_t)(c - '0');
+
+        if (result > (SIZE_MAX - digit) / 10)
+        {
+            return (ContentLengthResult){0, false};
+        }
+
+        result = result * 10 + digit;
+    }
+
+    return (ContentLengthResult){result, true};
 }
 
 enum HTTP_VERSION parse_http_version(const char* buffer)
 {
-    const StrSearchResult first_space_search_result = find_str_in_str(buffer, " ", 0, 1);
-    if (!first_space_search_result.found) return HTTP_VERSION_UNKNOWN;
+    RequestLine request_line;
+    if (!split_request_line(buffer, &request_line)) return HTTP_VERSION_UNKNOWN;
 
-    const size_t first_space = first_space_search_result.position;
-
-    const StrSearchResult second_space_search_result = find_str_in_str(buffer, " ", first_space + 1, 1);
-    if (!second_space_search_result.found) return HTTP_VERSION_UNKNOWN;
-
-    const size_t second_space = second_space_search_result.position;
-
-    const StrSearchResult line_end_search_result = find_str_in_str(buffer + second_space + 1, "\r\n", 0, 1);
-    if (!line_end_search_result.found) return HTTP_VERSION_UNKNOWN;
-
-    const size_t line_end = line_end_search_result.position;
-
-    char version_str[16];
-
-    const size_t copy_length = line_end + 1 < sizeof(version_str) ? line_end + 1 : sizeof(version_str);
-
-    string_copy(version_str, buffer + second_space + 1, copy_length);
-
-    if (string_compare(version_str, "HTTP/1.1") == 0) return HTTP_1_1;
-    if (string_compare(version_str, "HTTP/1.0") == 0) return HTTP_1_0;
+    // the protocol name is case-sensitive, http/1.1 is not valid
+    if (span_equals(request_line.version, span_from_string("HTTP/1.1"), CASE_SENSITIVE)) return HTTP_1_1;
+    if (span_equals(request_line.version, span_from_string("HTTP/1.0"), CASE_SENSITIVE)) return HTTP_1_0;
 
     return HTTP_VERSION_UNKNOWN;
 }
@@ -221,29 +272,29 @@ enum HTTP_VERSION parse_http_version(const char* buffer)
 bool parse_keep_alive(const char* buffer)
 {
     const enum HTTP_VERSION version = parse_http_version(buffer);
-    const StrSearchResult label_pos_search_result = find_str_in_str(buffer, HEADER_CONNECTION, 0, 1);
 
-    if (!label_pos_search_result.found)
+    bool has_close = false;
+    bool has_keep_alive = false;
+
+    const char* cursor = headers_start(buffer);
+    StrSpan name;
+    StrSpan value;
+
+    while (next_header(&cursor, &name, &value))
     {
-        // if http 1.1, we default to true for the keep alive
-        // otherwise false
-        return version == HTTP_1_1;
+        if (!span_equals(name, span_from_string(HEADER_CONNECTION), CASE_INSENSITIVE)) continue;
+
+        StrSpan rest = value;
+        StrSpan option;
+        while (next_delimited(&rest, ',', &option))
+        {
+            if (span_equals(option, span_from_string("close"), CASE_INSENSITIVE)) has_close = true;
+            if (span_equals(option, span_from_string("keep-alive"), CASE_INSENSITIVE)) has_keep_alive = true;
+        }
     }
 
-    const size_t value_start = label_pos_search_result.position + HEADER_CONNECTION_LEN;
-    const StrSearchResult line_end_search_result = find_str_in_str(buffer + value_start, "\r\n", 0, 1);
-    if (!line_end_search_result.found) return version == HTTP_1_1;
-
-    const size_t line_end = line_end_search_result.position;
-
-    char connection_value[32];
-
-    const size_t copy_length = line_end + 1 < sizeof(connection_value) ? line_end + 1 : sizeof(connection_value);
-
-    string_copy(connection_value, buffer + value_start, copy_length);
-
-    if (string_compare(connection_value, "close") == 0) return false;
-    if (string_compare(connection_value, "keep-alive") == 0) return true;
+    if (has_close) return false;
+    if (has_keep_alive) return true;
 
     return version == HTTP_1_1;
 }

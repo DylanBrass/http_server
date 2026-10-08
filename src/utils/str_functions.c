@@ -63,6 +63,12 @@ int string_copy(char* target, const char* source, const size_t max_len)
 StrSearchResult find_str_in_str(const char* haystack, const char* needle, const size_t start_from,
                                 const size_t target_occurrence)
 {
+    const size_t haystack_len = get_length(haystack);
+    if (start_from > haystack_len)
+    {
+        return (StrSearchResult){0, false};
+    }
+
     const size_t needle_len = get_length(needle);
     size_t start = start_from;
     size_t nb_found = 0;
@@ -82,7 +88,6 @@ StrSearchResult find_str_in_str(const char* haystack, const char* needle, const 
 
             if (nb_found == target_occurrence)
             {
-                //return position of the start of the needle in the pattern
                 return (StrSearchResult){start, true};
             }
         }
@@ -91,4 +96,95 @@ StrSearchResult find_str_in_str(const char* haystack, const char* needle, const 
     }
 
     return (StrSearchResult){0, false};
+}
+
+int string_to_lower(char *str)
+{
+    if (str == nullptr)
+    {
+        return -1;
+    }
+
+    for (; *str != '\0'; str++)
+    {
+        if (*str >= 'A' && *str <= 'Z')
+        {
+            *str = (char)(*str + ('a' - 'A'));
+        }
+    }
+    return 0;
+}
+
+char char_to_lower(const char c)
+{
+    if (c >= 'A' && c <= 'Z')
+    {
+        return (char)(c + ('a' - 'A'));
+    }
+    return c;
+}
+
+StrSpan span_from_string(const char* str)
+{
+    return (StrSpan){str, get_length(str)};
+}
+
+bool span_equals(const StrSpan first, const StrSpan second, const enum CASE_SENSITIVITY case_sensitivity)
+{
+    if (first.length != second.length) return false;
+
+    for (size_t i = 0; i < first.length; i++)
+    {
+        char first_char = first.data[i];
+        char second_char = second.data[i];
+
+        if (case_sensitivity == CASE_INSENSITIVE)
+        {
+            first_char = char_to_lower(first_char);
+            second_char = char_to_lower(second_char);
+        }
+
+        if (first_char != second_char) return false;
+    }
+    return true;
+}
+
+StrSpan span_trim(StrSpan span)
+{
+    while (span.length > 0 && (span.data[0] == ' ' || span.data[0] == '\t'))
+    {
+        span.data++;
+        span.length--;
+    }
+
+    while (span.length > 0 && (span.data[span.length - 1] == ' ' || span.data[span.length - 1] == '\t'))
+    {
+        span.length--;
+    }
+    return span;
+}
+
+bool next_delimited(StrSpan* rest, const char separator, StrSpan* item)
+{
+    if (rest->data == nullptr) return false;
+
+    size_t end = 0;
+    while (end < rest->length && rest->data[end] != separator)
+    {
+        end++;
+    }
+
+    *item = span_trim((StrSpan){rest->data, end});
+
+    if (end < rest->length)
+    {
+        rest->data += end + 1;
+        rest->length -= end + 1;
+    }
+    else
+    {
+        rest->data = nullptr;
+        rest->length = 0;
+    }
+    return true;
 }

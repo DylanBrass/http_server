@@ -68,7 +68,7 @@ Response handle_update(const Request* request)
         .status_code = 200,
         .content_type = APPLICATION_JSON,
         .body = body,
-        .body_length = get_length(body)
+        .body_length = request->body_length
     };
 }
 

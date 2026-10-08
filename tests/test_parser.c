@@ -372,6 +372,46 @@ static void test_should_return_empty_when_uri_exceeds_buffer_size(void)
 
 #pragma endregion
 
+#pragma region uri_too_long
+
+static void test_should_not_flag_uri_when_it_fits_in_buffer(void)
+{
+    assert(!uri_too_long("GET /test HTTP/1.1\r\n\r\n"));
+    printf("PASS: %s\n", __func__);
+}
+
+static void test_should_not_flag_uri_when_it_is_one_below_the_limit(void)
+{
+    char* req = make_request("GET /", URI_MAX_LENGTH - 2, 'a', " HTTP/1.1\r\n\r\n");
+    assert(!uri_too_long(req));
+    free(req);
+    printf("PASS: %s\n", __func__);
+}
+
+static void test_should_flag_uri_when_it_reaches_the_limit(void)
+{
+    char* req = make_request("GET /", URI_MAX_LENGTH - 1, 'a', " HTTP/1.1\r\n\r\n");
+    assert(uri_too_long(req));
+    free(req);
+    printf("PASS: %s\n", __func__);
+}
+
+static void test_should_flag_uri_when_it_far_exceeds_the_limit(void)
+{
+    char* req = make_request("GET /", 1000, 'a', " HTTP/1.1\r\n\r\n");
+    assert(uri_too_long(req));
+    free(req);
+    printf("PASS: %s\n", __func__);
+}
+
+static void test_should_not_flag_uri_when_request_line_is_malformed(void)
+{
+    assert(!uri_too_long("GET /test"));
+    printf("PASS: %s\n", __func__);
+}
+
+#pragma endregion
+
 #pragma region parse_content_length
 
 static void test_should_be_invalid_when_content_length_has_trailing_garbage(void)
@@ -478,6 +518,12 @@ int main(void)
     RUN(test_should_return_empty_when_request_is_malformed);
     RUN(test_should_return_empty_uri_when_request_line_has_no_version);
     RUN(test_should_return_empty_when_uri_exceeds_buffer_size);
+
+    RUN(test_should_not_flag_uri_when_it_fits_in_buffer);
+    RUN(test_should_not_flag_uri_when_it_is_one_below_the_limit);
+    RUN(test_should_flag_uri_when_it_reaches_the_limit);
+    RUN(test_should_flag_uri_when_it_far_exceeds_the_limit);
+    RUN(test_should_not_flag_uri_when_request_line_is_malformed);
 
     RUN(test_should_be_invalid_when_content_length_has_trailing_garbage);
     RUN(test_should_parse_value_when_content_length_name_is_lowercase);

@@ -185,6 +185,14 @@ void parse_uri(const char* buffer, char* uri_out)
     string_copy(uri_out, request_line.uri.data, request_line.uri.length + 1);
 }
 
+bool uri_too_long(const char* buffer)
+{
+    RequestLine request_line;
+    if (!split_request_line(buffer, &request_line)) return false;
+
+    return request_line.uri.length >= URI_MAX_LENGTH;
+}
+
 enum CONTENT_TYPE parse_content_type(const char* buffer)
 {
     const HeaderLookup header = lookup_header(buffer, HEADER_CONTENT_TYPE);

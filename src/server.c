@@ -2,6 +2,10 @@
 // Created by dylanbrass on 2026-09-06.
 //
 
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -10,7 +14,9 @@
 #include "httpserver.h"
 #include <signal.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/time.h>
+#include <time.h>
 
 #include "utils/buffer.h"
 #include "utils/queue.h"
@@ -45,6 +51,8 @@ const char* get_status_text(const int status_code)
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 413: return "Content Too Large";
+    case 414: return "URI Too Long";
+    case 431: return "Request Header Fields Too Large";
     case 500: return "Internal Server Error";
     case 501: return "Not Implemented";
     default: return "Unknown";
@@ -60,26 +68,35 @@ const char* get_content_type_text(const enum CONTENT_TYPE content_type)
     case APPLICATION_XML: return "application/xml";
     case IMAGE_JPEG: return "image/jpeg";
     case IMAGE_PNG: return "image/png";
-    default: return "Unknown";
+    case APPLICATION_JSON_UTF8: return "application/json; charset=utf-8";
+    case CONTENT_TYPE_NONE: return nullptr;
     }
+
+    return nullptr;
 }
 
 void write_http_header(const int current_connection, const Response response, const bool keep_alive)
 {
     char response_headers[RESPONSE_HEADER_SIZE] = {0};
-    snprintf(
-        response_headers,
-        sizeof(response_headers),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %zu\r\n"
-        "Connection: %s\r\n"
-        "\r\n",
-        response.status_code,
-        get_status_text(response.status_code),
-        get_content_type_text(response.content_type),
-        response.body_length,
-        keep_alive ? "keep-alive" : "close"
+    const char* content_type = get_content_type_text(response.content_type);
+    char content_type_line[96] = {0};
+
+    if (content_type != nullptr)
+    {
+        snprintf(content_type_line, sizeof(content_type_line), "Content-Type: %s\r\n", content_type);
+    }
+
+    snprintf(response_headers, sizeof(response_headers),
+             "HTTP/1.1 %d %s\r\n"
+             "%s"
+             "Content-Length: %zu\r\n"
+             "Connection: %s\r\n"
+             "\r\n",
+             response.status_code,
+             get_status_text(response.status_code),
+             content_type_line,
+             response.body_length,
+             keep_alive ? "keep-alive" : "close"
     );
 
     write(current_connection, response_headers, get_length(response_headers));
@@ -136,7 +153,7 @@ int add_request_body(Buffer* buffer, const int current_connection, size_t bytes_
             return -1;
         }
 
-        if (body_start > SIZE_MAX - content_length_result.value )
+        if (body_start > SIZE_MAX - content_length_result.value)
         {
             write_error_response(current_connection, 413, "<h1>413 Oversized request</h1>");
             return -1;
@@ -206,7 +223,7 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
         {
             if (total_bytes_read >= MAX_HEADER_SIZE)
             {
-                write_error_response(current_connection, 400, "<h1>400 Bad Request - Headers Too Large</h1>");
+                write_error_response(current_connection, 431, "<h1>431 Request Header Fields Too Large</h1>");
                 free_buffer(buffer);
                 close(current_connection);
                 return 0;
@@ -233,10 +250,27 @@ int handle_client_connection(const int current_connection, Buffer* buffer)
             total_bytes_read += (size_t)bytes_read;
             buffer->data[total_bytes_read] = '\0';
 
-            if (find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1).found)
+            const StrSearchResult headers_end = find_str_in_str(buffer->data, HTTP_DELIMITER, 0, 1);
+
+            if (headers_end.found)
             {
+                if (headers_end.position + HTTP_DELIMITER_LEN > MAX_HEADER_SIZE)
+                {
+                    write_error_response(current_connection, 431, "<h1>431 Request Header Fields Too Large</h1>");
+                    free_buffer(buffer);
+                    close(current_connection);
+                    return 0;
+                }
                 break;
             }
+        }
+
+        if (uri_too_long(buffer->data))
+        {
+            write_error_response(current_connection, 414, "<h1>414 URI Too Long</h1>");
+            free_buffer(buffer);
+            close(current_connection);
+            return 0;
         }
 
         char uri[URI_MAX_LENGTH];
@@ -322,21 +356,37 @@ void* handle_incoming_thread(void* arg)
     return nullptr;
 }
 
-void run_server(const int socket_descriptor)
+int run_server(const int socket_descriptor)
 {
     ConnectionQueue queue;
 
     if (queue_init(&queue) < 0)
     {
         perror("queue init failed");
-        return;
+        return -1;
     }
 
     pthread_t workers[THREAD_POOL_SIZE];
+    int workers_started = 0;
 
     for (int i = 0; i < THREAD_POOL_SIZE; i++)
     {
-        pthread_create(&workers[i], nullptr, handle_incoming_thread, &queue);
+        const int create_result = pthread_create(&workers[i], nullptr, handle_incoming_thread, &queue);
+
+        if (create_result != 0)
+        {
+            fprintf(stderr, "pthread_create failed for worker %d: %s\n", i, strerror(create_result));
+            break;
+        }
+
+        workers_started++;
+    }
+
+    if (workers_started == 0)
+    {
+        fprintf(stderr, "No worker threads could be started\n");
+        queue_destroy(&queue);
+        return -1;
     }
 
     while (true)
@@ -349,7 +399,8 @@ void run_server(const int socket_descriptor)
 
             if (errno == EMFILE || errno == ENFILE)
             {
-                usleep(1000);
+                const struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000 * 1000};
+                nanosleep(&pause, nullptr);
                 continue;
             }
 
@@ -367,8 +418,7 @@ void run_server(const int socket_descriptor)
 
     queue_shutdown(&queue);
 
-    // Shutdown all threads
-    for (int i = 0; i < THREAD_POOL_SIZE; i++)
+    for (int i = 0; i < workers_started; i++)
     {
         pthread_join(workers[i], nullptr);
     }
@@ -377,6 +427,8 @@ void run_server(const int socket_descriptor)
     {
         fprintf(stderr, "Failed to destroy the queue\n");
     }
+
+    return 0;
 }
 
 int start_server(const uint16_t port)
@@ -418,6 +470,7 @@ int start_server(const uint16_t port)
     if (setsockopt_result < 0)
     {
         perror("setsockopt failed");
+        close(socket_descriptor);
         return -1;
     }
 
@@ -431,6 +484,7 @@ int start_server(const uint16_t port)
     if (bind_result < 0)
     {
         perror("bind failed");
+        close(socket_descriptor);
         return -1;
     }
 
@@ -439,6 +493,7 @@ int start_server(const uint16_t port)
     if (listen_result < 0)
     {
         perror("listen failed");
+        close(socket_descriptor);
         return -1;
     }
 
@@ -454,9 +509,8 @@ int start_server(const uint16_t port)
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    run_server(socket_descriptor);
-
+    const int run_result = run_server(socket_descriptor);
     close_server(socket_descriptor);
 
-    return 0;
+    return run_result;
 }

@@ -6,6 +6,7 @@
 #define HTTP_SERVER_HTTPSERVER_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define HTTP_DELIMITER "\r\n\r\n"
 #define HTTP_DELIMITER_LEN (sizeof(HTTP_DELIMITER) - 1)
@@ -43,7 +44,6 @@ typedef struct
     size_t position;
     bool found;
 } StrSearchResult;
-
 
 StrSearchResult find_str_in_str(const char* haystack, const char* needle, size_t start_from, size_t target_occurrence);
 
@@ -151,6 +151,8 @@ int register_route(enum HTTP_METHOD http_method, enum CONTENT_TYPE request_body_
 RouteHandler find_route(const enum HTTP_METHOD http_method, const char* uri);
 
 void parse_uri(const char* buffer, char* uri_out);
+
+bool uri_too_long(const char* buffer);
 
 enum HTTP_METHOD parse_http_method(const char* buffer);
 
